@@ -26,10 +26,10 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
     open({ title, cwd, command, options: { zellij: sessionName } }) {
       requireLiveSession(execute, sessionName);
 
-      const tabId = findFirstTabId(execute, sessionName);
+      const tabId = findAgentTabId(execute, sessionName, title);
       const paneId = parseOrThrow(
         paneIdSchema,
-        execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...throughLoginShell(command)]),
+        execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--", ...throughLoginShell(command)]),
       );
 
       stackTab(execute, sessionName, tabId, paneId);
@@ -52,6 +52,17 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
       execute(["--session", session, "action", "paste", "--pane-id", paneId, text]);
       execute(["--session", session, "action", "send-keys", "--pane-id", paneId, "Enter"]);
     },
+
+    close({ session, paneId }: ZellijHandle) {
+      if (!isSessionLive(execute, session)) {
+        return;
+      }
+
+      const isPaneListed = listTerminalPanes(execute, session).some((pane) => toPaneId(pane.id) === paneId);
+      if (isPaneListed) {
+        execute(["--session", session, "action", "close-pane", "--pane-id", paneId]);
+      }
+    },
   };
 }
 
@@ -69,7 +80,7 @@ const sessionsSchema = z
   .transform((output) => output.split("\n").filter(Boolean))
   .pipe(z.array(sessionLineSchema));
 
-const tabsSchema = jsonSchema(z.array(z.looseObject({ tab_id: z.number(), position: z.number() })));
+const tabsSchema = jsonSchema(z.array(z.looseObject({ tab_id: z.number(), position: z.number(), name: z.string() })));
 
 const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), tab_id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
 
@@ -104,14 +115,15 @@ function requireLiveSession(execute: ZellijExecutor, sessionName: string): void 
   }
 }
 
-function findFirstTabId(execute: ZellijExecutor, sessionName: string): string {
+function findAgentTabId(execute: ZellijExecutor, sessionName: string, agentName: string): string {
   const tabs = parseOrThrow(tabsSchema, execute(["--session", sessionName, "action", "list-tabs", "--json"]));
   const [firstTab] = tabs.toSorted((earlier, later) => earlier.position - later.position);
-  if (!firstTab) {
+  const agentTab = tabs.find((tab) => tab.name === agentName) ?? firstTab;
+  if (!agentTab) {
     throw new Error(`zellij session "${sessionName}" has no tabs`);
   }
 
-  return String(firstTab.tab_id);
+  return String(agentTab.tab_id);
 }
 
 function throughLoginShell(command: string[]): string[] {
@@ -120,7 +132,7 @@ function throughLoginShell(command: string[]): string[] {
 
 function stackTab(execute: ZellijExecutor, sessionName: string, tabId: string, newPaneId: string): void {
   const tabPaneIds = listTerminalPanes(execute, sessionName)
-    .filter((pane) => String(pane.tab_id) === tabId && !pane.exited)
+    .filter((pane) => String(pane.tab_id) === tabId)
     .map((pane) => toPaneId(pane.id))
     .filter((paneId) => paneId !== newPaneId);
   if (tabPaneIds.length === 0) {

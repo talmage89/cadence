@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { type FakeTerminal, fakeRuntime, fakeTerminal } from "#testing/fakes.ts";
 import { LaunchOutcome, launch } from "./launcher.ts";
 import { type Runtime, sessionsDirectory } from "./runtime.ts";
-import { acquireSession } from "./session.ts";
+import { acquireSession, releaseSession } from "./session.ts";
 import { type AgentSpec, parseSpec } from "./spec.ts";
 
 interface Setup {
@@ -34,6 +34,27 @@ describe("launch", () => {
       assert.deepEqual(terminal.opened, [
         { title: "agent", cwd: "/work", command: ["node", "/cadence/src/cli.ts", "run", "agent"], options: { session: "agents" } },
       ]);
+    });
+
+    it("should close the previous session after opening the new one", () => {
+      const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
+      holdSession(runtime, { pane: "3" });
+      releaseSession(sessionsDirectory(runtime), "agent", process.pid);
+
+      launch(spec, runtime);
+
+      assert.equal(terminal.opened.length, 1);
+      assert.deepEqual(terminal.closed, ["3"]);
+    });
+
+    it("should close nothing when there is no usable previous session", () => {
+      const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
+      holdSession(runtime, null);
+      releaseSession(sessionsDirectory(runtime), "agent", process.pid);
+
+      launch(spec, runtime);
+
+      assert.deepEqual(terminal.closed, []);
     });
 
     it("should let terminal errors propagate", () => {

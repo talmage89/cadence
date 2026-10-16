@@ -1,22 +1,29 @@
 import { type Runtime, sessionsDirectory } from "./runtime.ts";
-import { readLiveSession } from "./session.ts";
+import { readLiveSession, readPreviousSession } from "./session.ts";
 import { type AgentSpec, instructionsPrompt, LifetimeKind } from "./spec.ts";
 
 export const LaunchOutcome = { Started: "started", Prompted: "prompted", Busy: "busy" } as const;
 export type LaunchOutcome = (typeof LaunchOutcome)[keyof typeof LaunchOutcome];
 
 export function launch(spec: AgentSpec, runtime: Runtime): LaunchOutcome {
-  const liveSession = readLiveSession(sessionsDirectory(runtime), spec.name);
+  const directory = sessionsDirectory(runtime);
+  const liveSession = readLiveSession(directory, spec.name);
   if (liveSession) {
     return promptLiveSession(spec, runtime, liveSession.handle);
   }
 
+  const previousSession = readPreviousSession(directory, spec.name);
   runtime.terminal.open({
     title: spec.name,
     cwd: spec.cwd,
     command: [...runtime.supervisorCommand, "run", spec.name],
     options: spec.terminalOptions,
   });
+
+  if (previousSession) {
+    closeFinishedSession(runtime, previousSession.handle);
+  }
+
   return LaunchOutcome.Started;
 }
 
@@ -33,4 +40,11 @@ function promptLiveSession(spec: AgentSpec, runtime: Runtime, storedHandle: unkn
 
   terminal.deliver(handle.data, instructionsPrompt(spec));
   return LaunchOutcome.Prompted;
+}
+
+function closeFinishedSession(runtime: Runtime, storedHandle: unknown): void {
+  const handle = runtime.terminal.handle.safeParse(storedHandle);
+  if (handle.success) {
+    runtime.terminal.close(handle.data);
+  }
 }

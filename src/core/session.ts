@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { jsonSchema } from "./validation.ts";
@@ -35,8 +35,12 @@ export function readLiveSession(directory: string, name: string): SessionRecord 
 export function releaseSession(directory: string, name: string, pid: number): void {
   const file = recordFile(directory, name);
   if (readRecord(file)?.pid === pid) {
-    removeFile(file);
+    renameSync(file, previousRecordFile(directory, name));
   }
+}
+
+export function readPreviousSession(directory: string, name: string): SessionRecord | null {
+  return readRecord(previousRecordFile(directory, name));
 }
 
 export function isProcessAlive(pid: number): boolean {
@@ -52,6 +56,10 @@ const recordFileSchema = jsonSchema(sessionRecordSchema);
 
 function recordFile(directory: string, name: string): string {
   return join(directory, `${name}.json`);
+}
+
+function previousRecordFile(directory: string, name: string): string {
+  return join(directory, `${name}.previous.json`);
 }
 
 function tryCreateRecord(file: string, record: SessionRecord): boolean {

@@ -94,10 +94,14 @@ log says which session to start. Each agent runs through your login shell
 (`$SHELL -lic`), exactly like a pane you open by hand, so it sees your full
 environment whatever environment the session itself was started with.
 
-Each agent runs as a pane in the session's first tab, stacked with the panes
-already there, so the tab keeps your layout whether or not you are attached.
-An agent's pane closes when the agent exits; cadence never creates or closes
+Each agent runs as a pane in the tab named after it, so create a `digest` tab
+for a `digest.md` agent. Without one, the agent uses the session's first tab.
+Either way its pane is stacked with the panes already there, and the tab keeps
+your layout whether or not you are attached; cadence never creates or closes
 tabs.
+
+A finished run's pane stays open, showing how it ended, until the agent's next
+run opens; cadence then closes it. A resident agent keeps one pane throughout.
 
 Keys owned by the Claude Code runner:
 

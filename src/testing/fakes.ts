@@ -17,6 +17,7 @@ export interface FakeTerminal extends Terminal<typeof terminalOptionsSchema, typ
   openError: Error | null;
   opened: OpenRequest<z.output<typeof terminalOptionsSchema>>[];
   delivered: { pane: string; text: string }[];
+  closed: string[];
 }
 
 export function fakeTerminal(): FakeTerminal {
@@ -29,6 +30,7 @@ export function fakeTerminal(): FakeTerminal {
     openError: null,
     opened: [],
     delivered: [],
+    closed: [],
 
     isAvailable() {
       return terminal.isReachable;
@@ -47,6 +49,9 @@ export function fakeTerminal(): FakeTerminal {
     },
     deliver({ pane }, text) {
       terminal.delivered.push({ pane, text });
+    },
+    close({ pane }) {
+      terminal.closed.push(pane);
     },
   };
   return terminal;
