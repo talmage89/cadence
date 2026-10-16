@@ -79,7 +79,7 @@ describe("zellij", () => {
       terminal.open(openRequest);
 
       assert.deepEqual(calls.slice(1), [
-        ["--session", "agents", "action", "new-tab", "--name", "digest", "--layout-string", 'layout {\n  pane command="sleep" close_on_exit=true {\n    args "3"\n  }\n}'],
+        ["--session", "agents", "action", "new-tab", "--name", "digest", "--cwd", "/work", "--close-on-exit", "--", "sleep", "3"],
         ["--session", "agents", "run", "--tab-id", "4", "--cwd", "/work", "--name", "digest", "--close-on-exit", "--", "/bin/sh", "-c", loginShellScript, "cadence", "node", "cli.ts", "run", "digest"],
       ]);
     });

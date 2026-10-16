@@ -26,7 +26,10 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
     open({ title, cwd, command, options: { zellij: sessionName } }) {
       requireLiveSession(execute, sessionName);
 
-      const tabId = parseOrThrow(tabIdSchema, execute(["--session", sessionName, "action", "new-tab", "--name", title, "--layout-string", placeholderLayout]));
+      const tabId = parseOrThrow(
+        tabIdSchema,
+        execute(["--session", sessionName, "action", "new-tab", "--name", title, "--cwd", cwd, "--close-on-exit", "--", ...placeholderCommand]),
+      );
       execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...throughLoginShell(command)]);
     },
 
@@ -53,10 +56,8 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
 
 const exitedMarker = "EXITED";
 const terminalPanePrefix = "terminal_";
-const placeholderSeconds = 3;
+const placeholderCommand = ["sleep", "3"];
 const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
-
-const placeholderLayout = `layout {\n  pane command="sleep" close_on_exit=true {\n    args "${placeholderSeconds}"\n  }\n}`;
 
 const sessionLineSchema = z
   .string()
