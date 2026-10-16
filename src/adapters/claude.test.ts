@@ -6,14 +6,14 @@ describe("claude", () => {
   const runner = claude();
 
   describe("command", () => {
-    it("should disallow subagents by default", () => {
+    it("should start Claude on the prompt alone when no options are set", () => {
       const options = runner.options.parse({});
 
-      assert.deepEqual(runner.command("go", options), ["claude", "go", "--disallowedTools", "Agent", "Workflow"]);
+      assert.deepEqual(runner.command("go", options), ["claude", "go"]);
     });
 
     it("should pass permission mode, model, and allowed tools", () => {
-      const options = runner.options.parse({ "permission-mode": "auto", model: "sonnet", tools: ["Read", "Bash(git *)"], subagents: true });
+      const options = runner.options.parse({ "permission-mode": "auto", model: "sonnet", tools: ["Read", "Bash(git *)"] });
 
       const command = runner.command("go", options);
 
@@ -21,7 +21,7 @@ describe("claude", () => {
     });
 
     it("should omit an empty tool list", () => {
-      const options = runner.options.parse({ tools: [], subagents: true });
+      const options = runner.options.parse({ tools: [] });
 
       assert.deepEqual(runner.command("go", options), ["claude", "go"]);
     });
@@ -35,7 +35,7 @@ describe("claude", () => {
 
   describe("options", () => {
     it("should reject values of the wrong type", () => {
-      assert.equal(runner.options.safeParse({ subagents: "yes" }).success, false);
+      assert.equal(runner.options.safeParse({ model: 4 }).success, false);
       assert.equal(runner.options.safeParse({ tools: "Read" }).success, false);
     });
   });
