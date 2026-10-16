@@ -95,6 +95,7 @@ log says which session to start. Each agent runs through your login shell
 environment whatever environment the session itself was started with.
 Each agent gets its own tab, opened with your default tab template and closed
 when the agent exits, unless you have opened other panes in it.
+
 Keys owned by the Claude Code runner:
 
 | Key | | |
