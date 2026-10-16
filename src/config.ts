@@ -1,56 +1,74 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { expandHome } from "./core/paths.ts";
-import type { Runtime } from "./core/runtime.ts";
+import { z } from "zod";
+import { expandHome } from "#core/paths.ts";
+import type { Runtime } from "#core/runtime.ts";
+import { describeError, parseOrThrow } from "#core/validation.ts";
 
 export type Config = Omit<Runtime, "supervisorCommand">;
 
-export interface Environment {
-  require(key: string): string;
-  optional(key: string): string | undefined;
+export interface ConfigDefinition<EnvironmentSchema extends z.ZodObject = z.ZodObject> {
+  environment: EnvironmentSchema;
+  create(environment: z.output<EnvironmentSchema>): Config;
 }
-
-export type ConfigFactory = (environment: Environment) => Config;
 
 export const repositoryRoot = resolve(import.meta.dirname, "..");
 
-const cliFile = join(repositoryRoot, "src", "cli.ts");
+export const settingSchema = z.string().min(1);
+export const optionalSettingSchema = z
+  .string()
+  .optional()
+  .transform((value) => value || undefined);
 
-export function defineConfig(factory: ConfigFactory): ConfigFactory {
-  return factory;
-}
-
-export function createEnvironment(variables: NodeJS.ProcessEnv): Environment {
-  return {
-    require(key) {
-      const value = variables[key];
-      if (!value) throw new Error(`${key} is not set; copy .env.example to .env and fill it in`);
-      return value;
-    },
-    optional(key) {
-      return variables[key] || undefined;
-    },
-  };
-}
-
-export function resolveRuntime(factory: ConfigFactory, environment: Environment): Runtime {
-  const config = factory(environment);
-  return {
-    ...config,
-    agentsDirectory: resolve(expandHome(config.agentsDirectory)),
-    stateDirectory: resolve(expandHome(config.stateDirectory)),
-    logDirectory: resolve(expandHome(config.logDirectory)),
-    defaultCwd: resolve(expandHome(config.defaultCwd)),
-    supervisorCommand: [process.execPath, cliFile],
-  };
+export function defineConfig<EnvironmentSchema extends z.ZodObject>(
+  definition: ConfigDefinition<EnvironmentSchema>,
+): ConfigDefinition<EnvironmentSchema> {
+  return definition;
 }
 
 export async function loadRuntime(): Promise<Runtime> {
   const envFile = join(repositoryRoot, ".env");
-  if (existsSync(envFile)) process.loadEnvFile(envFile);
+  if (existsSync(envFile)) {
+    process.loadEnvFile(envFile);
+  }
 
-  const configUrl = pathToFileURL(join(repositoryRoot, "cadence.config.ts")).href;
-  const { default: factory } = (await import(configUrl)) as { default: ConfigFactory };
-  return resolveRuntime(factory, createEnvironment(process.env));
+  const configModule = await import(pathToFileURL(join(repositoryRoot, configFileName)).href);
+  const { default: definition } = parseOrThrow(configModuleSchema, configModule);
+  return resolveRuntime(definition, process.env);
+}
+
+export function resolveRuntime(definition: ConfigDefinition, variables: NodeJS.ProcessEnv): Runtime {
+  const environment = parseEnvironment(definition, variables);
+  const config = definition.create(environment);
+
+  return {
+    ...config,
+    agentsDirectory: resolvePath(config.agentsDirectory),
+    stateDirectory: resolvePath(config.stateDirectory),
+    logDirectory: resolvePath(config.logDirectory),
+    defaultCwd: resolvePath(config.defaultCwd),
+    supervisorCommand: [process.execPath, join(repositoryRoot, "src", "cli.ts")],
+  };
+}
+
+const configFileName = "cadence.config.ts";
+
+const configModuleSchema = z.object({
+  default: z.object({
+    environment: z.instanceof(z.ZodObject),
+    create: z.custom<ConfigDefinition["create"]>((value) => typeof value === "function"),
+  }),
+});
+
+function parseEnvironment(definition: ConfigDefinition, variables: NodeJS.ProcessEnv): Record<string, unknown> {
+  try {
+    return parseOrThrow(definition.environment, variables);
+  } catch (error) {
+    throw new Error(`environment is incomplete (copy .env.example to .env and fill it in): ${describeError(error)}`);
+  }
+}
+
+function resolvePath(path: string): string {
+  return resolve(expandHome(path));
 }

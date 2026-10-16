@@ -1,28 +1,42 @@
 import { z } from "zod";
-import type { Runner } from "../core/ports.ts";
+import type { Runner } from "#core/ports.ts";
 
-export interface ClaudeSettings {
+export interface ClaudeParams {
   executable?: string;
 }
 
-const options = z.object({
+const optionsSchema = z.object({
   "permission-mode": z.string().optional(),
   model: z.string().optional(),
   tools: z.array(z.string()).optional(),
   subagents: z.boolean().default(false),
 });
 
-export function claude({ executable = "claude" }: ClaudeSettings = {}): Runner<typeof options> {
+export function claude({ executable = "claude" }: ClaudeParams = {}): Runner<typeof optionsSchema> {
   return {
-    options,
+    options: optionsSchema,
 
-    command(prompt, { "permission-mode": permissionMode, model, tools, subagents }) {
+    command(prompt, { "permission-mode": permissionMode, model, tools = [], subagents }) {
       const command = [executable, prompt];
-      if (permissionMode) command.push("--permission-mode", permissionMode);
-      if (model) command.push("--model", model);
-      if (tools && tools.length > 0) command.push("--allowedTools", ...tools);
-      if (!subagents) command.push("--disallowedTools", "Agent", "Workflow");
+      if (permissionMode) {
+        command.push("--permission-mode", permissionMode);
+      }
+
+      if (model) {
+        command.push("--model", model);
+      }
+
+      if (tools.length > 0) {
+        command.push("--allowedTools", ...tools);
+      }
+
+      if (!subagents) {
+        command.push("--disallowedTools", ...subagentTools);
+      }
+
       return command;
     },
   };
 }
+
+const subagentTools = ["Agent", "Workflow"];

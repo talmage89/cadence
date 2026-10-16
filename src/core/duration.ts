@@ -1,16 +1,27 @@
-const unitMilliseconds: Record<string, number> = {
-  s: 1_000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
+import { z } from "zod";
 
-export function parseDuration(text: string): number {
-  const match = text.trim().match(/^(\d+)([smhd])$/);
-  if (!match) throw new Error(`invalid duration "${text}": use a whole number with s, m, h, or d, like 45m`);
+export const secondMilliseconds = 1_000;
+export const minuteMilliseconds = 60 * secondMilliseconds;
+export const hourMilliseconds = 60 * minuteMilliseconds;
+export const dayMilliseconds = 24 * hourMilliseconds;
 
-  const [, amount = "", unit = ""] = match;
-  const milliseconds = Number(amount) * (unitMilliseconds[unit] ?? Number.NaN);
-  if (!(milliseconds > 0)) throw new Error(`invalid duration "${text}": must be longer than zero`);
-  return milliseconds;
+const DurationUnit = { Second: "s", Minute: "m", Hour: "h", Day: "d" } as const;
+type DurationUnit = (typeof DurationUnit)[keyof typeof DurationUnit];
+
+export const durationSchema = z
+  .string()
+  .trim()
+  .regex(/^[1-9]\d*[smhd]$/, { error: (issue) => `invalid duration "${String(issue.input)}": use a whole number with s, m, h, or d, like 45m` })
+  .transform(toMilliseconds);
+
+function toMilliseconds(text: string): number {
+  const unit = z.enum(DurationUnit).parse(text.slice(-1));
+  return Number(text.slice(0, -1)) * unitMilliseconds[unit];
 }
+
+const unitMilliseconds: Record<DurationUnit, number> = {
+  [DurationUnit.Second]: secondMilliseconds,
+  [DurationUnit.Minute]: minuteMilliseconds,
+  [DurationUnit.Hour]: hourMilliseconds,
+  [DurationUnit.Day]: dayMilliseconds,
+};

@@ -1,84 +1,47 @@
 import { execFileSync } from "node:child_process";
 import { z } from "zod";
-import type { Terminal } from "../core/ports.ts";
+import type { Terminal } from "#core/ports.ts";
+import { jsonSchema, parseOrThrow } from "#core/validation.ts";
 
 export type ZellijExecutor = (zellijArguments: string[]) => string;
 
-export interface ZellijSettings {
+export interface ZellijParams {
   execute?: ZellijExecutor;
 }
 
-interface ZellijSession {
-  name: string;
-  isExited: boolean;
-}
+const optionsSchema = z.object({ zellij: z.string().min(1) });
+const handleSchema = z.object({ session: z.string(), paneId: z.string() });
 
-const options = z.object({ zellij: z.string().min(1) });
-const handle = z.object({ session: z.string(), paneId: z.string() });
+type ZellijHandle = z.output<typeof handleSchema>;
 
-type ZellijHandle = z.output<typeof handle>;
-
-const placeholderLayout = 'layout {\n  pane command="sleep" close_on_exit=true {\n    args "3"\n  }\n}';
-
-const listedPaneSchema = z.array(
-  z.object({ id: z.number(), is_plugin: z.boolean(), exited: z.boolean() }).loose(),
-);
-
-function executeZellij(zellijArguments: string[]): string {
-  return execFileSync("zellij", zellijArguments, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-}
-
-export function zellij({ execute = executeZellij }: ZellijSettings = {}): Terminal<typeof options, typeof handle> {
-  function listSessions(): ZellijSession[] {
-    try {
-      return execute(["list-sessions", "--no-formatting"])
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => ({ name: line.split(" ")[0] ?? "", isExited: line.includes("EXITED") }));
-    } catch {
-      return [];
-    }
-  }
-
-  function isSessionLive(sessionName: string): boolean {
-    return listSessions().some((session) => session.name === sessionName && !session.isExited);
-  }
-
-  function ensureSession(sessionName: string): void {
-    const existingSession = listSessions().find((session) => session.name === sessionName);
-    if (existingSession && !existingSession.isExited) return;
-
-    if (existingSession) execute(["delete-session", sessionName]);
-    execute(["attach", "--create-background", sessionName]);
-  }
-
+export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal<typeof optionsSchema, typeof handleSchema> {
   return {
-    options,
-    handle,
+    options: optionsSchema,
+    handle: handleSchema,
 
     isAvailable() {
-      return listSessions().some((session) => !session.isExited);
+      return listSessions(execute).some((session) => !session.isExited);
     },
 
     open({ title, cwd, command, options: { zellij: sessionName } }) {
-      ensureSession(sessionName);
+      ensureSession(execute, sessionName);
 
-      const tabId = execute(["--session", sessionName, "action", "new-tab", "--name", title, "--layout-string", placeholderLayout]);
+      const tabId = parseOrThrow(tabIdSchema, execute(["--session", sessionName, "action", "new-tab", "--name", title, "--layout-string", placeholderLayout]));
       execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...command]);
     },
 
     currentHandle(environment) {
-      const session = environment.ZELLIJ_SESSION_NAME;
-      const paneNumber = environment.ZELLIJ_PANE_ID;
-      if (!session || !paneNumber) return null;
-      return { session, paneId: `terminal_${paneNumber}` };
+      const result = paneEnvironmentSchema.safeParse(environment);
+      return result.success ? result.data : null;
     },
 
     isLive({ session, paneId }: ZellijHandle) {
-      if (!isSessionLive(session)) return false;
+      if (!isSessionLive(execute, session)) {
+        return false;
+      }
 
-      const panes = listedPaneSchema.parse(JSON.parse(execute(["--session", session, "action", "list-panes", "--json", "--all"])));
-      return panes.some((pane) => !pane.is_plugin && !pane.exited && `terminal_${pane.id}` === paneId);
+      const panes = parseOrThrow(panesSchema, execute(["--session", session, "action", "list-panes", "--json", "--all"]));
+      return panes.some((pane) => !pane.is_plugin && !pane.exited && toPaneId(pane.id) === paneId);
     },
 
     deliver({ session, paneId }: ZellijHandle, text) {
@@ -86,4 +49,63 @@ export function zellij({ execute = executeZellij }: ZellijSettings = {}): Termin
       execute(["--session", session, "action", "send-keys", "--pane-id", paneId, "Enter"]);
     },
   };
+}
+
+const exitedMarker = "EXITED";
+const terminalPanePrefix = "terminal_";
+const placeholderSeconds = 3;
+
+const placeholderLayout = `layout {\n  pane command="sleep" close_on_exit=true {\n    args "${placeholderSeconds}"\n  }\n}`;
+
+const sessionLineSchema = z
+  .string()
+  .regex(/^\S+/)
+  .transform((line) => ({ name: line.split(" ", 1)[0] ?? "", isExited: line.includes(exitedMarker) }));
+
+const sessionsSchema = z
+  .string()
+  .transform((output) => output.split("\n").filter(Boolean))
+  .pipe(z.array(sessionLineSchema));
+
+const tabIdSchema = z.string().regex(/^\d+$/, { error: (issue) => `zellij returned an unexpected tab id: ${String(issue.input)}` });
+
+const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
+
+const paneEnvironmentSchema = z
+  .object({ ZELLIJ_SESSION_NAME: z.string().min(1), ZELLIJ_PANE_ID: z.string().regex(/^\d+$/) })
+  .transform(({ ZELLIJ_SESSION_NAME, ZELLIJ_PANE_ID }) => ({ session: ZELLIJ_SESSION_NAME, paneId: toPaneId(ZELLIJ_PANE_ID) }));
+
+function executeZellij(zellijArguments: string[]): string {
+  return execFileSync("zellij", zellijArguments, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+function listSessions(execute: ZellijExecutor): z.output<typeof sessionsSchema> {
+  let output: string;
+  try {
+    output = execute(["list-sessions", "--no-formatting"]);
+  } catch {
+    return [];
+  }
+
+  return parseOrThrow(sessionsSchema, output);
+}
+
+function isSessionLive(execute: ZellijExecutor, sessionName: string): boolean {
+  return listSessions(execute).some((session) => session.name === sessionName && !session.isExited);
+}
+
+function ensureSession(execute: ZellijExecutor, sessionName: string): void {
+  const existingSession = listSessions(execute).find((session) => session.name === sessionName);
+  if (existingSession && !existingSession.isExited) {
+    return;
+  }
+
+  if (existingSession) {
+    execute(["delete-session", sessionName]);
+  }
+  execute(["attach", "--create-background", sessionName]);
+}
+
+function toPaneId(paneNumber: number | string): string {
+  return `${terminalPanePrefix}${paneNumber}`;
 }

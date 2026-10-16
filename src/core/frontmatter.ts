@@ -1,4 +1,6 @@
 import { parse } from "yaml";
+import { z } from "zod";
+import { parseOrThrow } from "./validation.ts";
 
 export interface Frontmatter {
   fields: Record<string, unknown>;
@@ -7,17 +9,17 @@ export interface Frontmatter {
 
 const frontmatterPattern = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const fieldsSchema = z
+  .record(z.string(), z.unknown(), { error: "frontmatter must be a mapping of keys to values" })
+  .nullish()
+  .transform((fields) => fields ?? {});
 
 export function splitFrontmatter(text: string): Frontmatter {
   const match = text.match(frontmatterPattern);
-  if (!match) return { fields: {}, body: text };
+  if (!match) {
+    return { fields: {}, body: text };
+  }
 
-  const parsed: unknown = parse(match[1] ?? "");
-  if (parsed === null || parsed === undefined) return { fields: {}, body: text.slice(match[0].length) };
-  if (!isRecord(parsed)) throw new Error("frontmatter must be a mapping of keys to values");
-
-  return { fields: parsed, body: text.slice(match[0].length) };
+  const [block, yaml = ""] = match;
+  return { fields: parseOrThrow(fieldsSchema, parse(yaml)), body: text.slice(block.length) };
 }

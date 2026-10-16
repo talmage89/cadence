@@ -1,38 +1,42 @@
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { OpenRequest, Runner, Terminal } from "../core/ports.ts";
-import type { Runtime } from "../core/runtime.ts";
+import type { OpenRequest, Runner, Terminal } from "#core/ports.ts";
+import type { Runtime } from "#core/runtime.ts";
 
-const terminalOptions = z.object({ session: z.string().default("main") });
-const terminalHandle = z.object({ pane: z.string() });
+const terminalOptionsSchema = z.object({ session: z.string().default("main") });
+const terminalHandleSchema = z.object({ pane: z.string() });
 
-export interface FakeTerminal extends Terminal<typeof terminalOptions, typeof terminalHandle> {
-  available: boolean;
+type FakeHandle = z.output<typeof terminalHandleSchema>;
+
+export interface FakeTerminal extends Terminal<typeof terminalOptionsSchema, typeof terminalHandleSchema> {
+  isReachable: boolean;
   livePanes: Set<string>;
-  environmentHandle: { pane: string } | null;
-  failOpenWith: Error | null;
-  opened: OpenRequest<z.output<typeof terminalOptions>>[];
+  environmentHandle: FakeHandle | null;
+  openError: Error | null;
+  opened: OpenRequest<z.output<typeof terminalOptionsSchema>>[];
   delivered: { pane: string; text: string }[];
 }
 
 export function fakeTerminal(): FakeTerminal {
   const terminal: FakeTerminal = {
-    options: terminalOptions,
-    handle: terminalHandle,
-    available: true,
+    options: terminalOptionsSchema,
+    handle: terminalHandleSchema,
+    isReachable: true,
     livePanes: new Set(),
     environmentHandle: null,
-    failOpenWith: null,
+    openError: null,
     opened: [],
     delivered: [],
 
     isAvailable() {
-      return terminal.available;
+      return terminal.isReachable;
     },
     open(request) {
-      if (terminal.failOpenWith) throw terminal.failOpenWith;
+      if (terminal.openError) {
+        throw terminal.openError;
+      }
       terminal.opened.push(request);
     },
     currentHandle() {
@@ -48,19 +52,15 @@ export function fakeTerminal(): FakeTerminal {
   return terminal;
 }
 
-const runnerOptions = z.object({ script: z.string().default("") });
+const runnerOptionsSchema = z.object({ script: z.string().default("") });
 
-export function nodeRunner(): Runner<typeof runnerOptions> {
+export function nodeRunner(): Runner<typeof runnerOptionsSchema> {
   return {
-    options: runnerOptions,
+    options: runnerOptionsSchema,
     command(_prompt, { script }) {
       return [process.execPath, "-e", script];
     },
   };
-}
-
-export function temporaryDirectory(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), "cadence-test-")));
 }
 
 export function fakeRuntime(overrides: Partial<Runtime> = {}): Runtime {
@@ -78,8 +78,23 @@ export function fakeRuntime(overrides: Partial<Runtime> = {}): Runtime {
   };
 }
 
+export function temporaryDirectory(): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), "cadence-test-")));
+}
+
 export function writeSpec(directory: string, name: string, frontmatter: string): string {
   const file = join(directory, `${name}.md`);
   writeFileSync(file, `---\n${frontmatter}\n---\n\nDo the work.\n`);
   return file;
+}
+
+export function readLogMessages(file: string): string[] {
+  if (!existsSync(file)) {
+    return [];
+  }
+
+  return readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => line.replace(/^\S+ /, ""));
 }

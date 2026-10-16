@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { minuteMilliseconds } from "./duration.ts";
+
 export interface Schedule {
   expression: string;
   minutes: Set<number>;
@@ -14,69 +17,27 @@ interface FieldBounds {
   maximum: number;
 }
 
-const minuteMilliseconds = 60_000;
-
-const fieldBounds: FieldBounds[] = [
-  { minimum: 0, maximum: 59 },
-  { minimum: 0, maximum: 23 },
-  { minimum: 1, maximum: 31 },
-  { minimum: 1, maximum: 12 },
-  { minimum: 0, maximum: 7 },
-];
-
-function expandField(expression: string, { minimum, maximum }: FieldBounds): Set<number> {
-  const values = new Set<number>();
-
-  for (const part of expression.split(",")) {
-    const [rangeText = "", stepText] = part.split("/");
-    const step = stepText === undefined ? 1 : Number(stepText);
-
-    let start: number;
-    let end: number;
-    if (rangeText === "*") {
-      start = minimum;
-      end = maximum;
-    } else if (rangeText.includes("-")) {
-      [start = Number.NaN, end = Number.NaN] = rangeText.split("-").map(Number);
-    } else {
-      start = Number(rangeText);
-      end = stepText === undefined ? start : maximum;
-    }
-
-    const isValid =
-      rangeText !== "" &&
-      [start, end, step].every(Number.isInteger) &&
-      step > 0 &&
-      start >= minimum &&
-      end <= maximum &&
-      start <= end;
-    if (!isValid) throw new Error(`invalid cron field "${expression}"`);
-
-    for (let value = start; value <= end; value += step) values.add(value);
-  }
-
-  return values;
+interface FieldRange {
+  start: number;
+  end: number;
+  step: number;
 }
 
-export function parseSchedule(expression: string): Schedule {
-  const fieldExpressions = expression.trim().split(/\s+/);
-  if (fieldExpressions.length !== 5) throw new Error(`schedule "${expression}" needs five fields`);
+const wildcard = "*";
+const sunday = 0;
+const alternateSunday = 7;
+const fieldCount = 5;
 
-  const [minutes, hours, daysOfMonth, months, daysOfWeek] = fieldExpressions.map((fieldExpression, index) =>
-    expandField(fieldExpression, fieldBounds[index] as FieldBounds),
-  ) as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
-  if (daysOfWeek.has(7)) daysOfWeek.add(0);
+export const scheduleSchema = z.string().transform(toSchedule);
 
-  return {
-    expression,
-    minutes,
-    hours,
-    daysOfMonth,
-    months,
-    daysOfWeek,
-    isDayOfMonthRestricted: fieldExpressions[2] !== "*",
-    isDayOfWeekRestricted: fieldExpressions[4] !== "*",
-  };
+export function isDueSince(schedule: Schedule, sinceMilliseconds: number, nowMilliseconds: number): boolean {
+  for (let minute = floorToMinute(sinceMilliseconds) + minuteMilliseconds; minute <= nowMilliseconds; minute += minuteMilliseconds) {
+    if (scheduleMatches(schedule, new Date(minute))) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function scheduleMatches(schedule: Schedule, date: Date): boolean {
@@ -93,11 +54,98 @@ export function scheduleMatches(schedule: Schedule, date: Date): boolean {
   );
 }
 
-export function isDueSince(schedule: Schedule, sinceMilliseconds: number, nowMilliseconds: number): boolean {
-  const firstMinute = Math.floor(sinceMilliseconds / minuteMilliseconds) * minuteMilliseconds + minuteMilliseconds;
+export function floorToMinute(milliseconds: number): number {
+  return Math.floor(milliseconds / minuteMilliseconds) * minuteMilliseconds;
+}
 
-  for (let minute = firstMinute; minute <= nowMilliseconds; minute += minuteMilliseconds) {
-    if (scheduleMatches(schedule, new Date(minute))) return true;
+function toSchedule(expression: string, context: z.RefinementCtx<string>): Schedule {
+  const fieldTexts = expression.trim().split(/\s+/);
+  if (fieldTexts.length !== fieldCount) {
+    context.addIssue({ code: "custom", message: `"${expression}" needs ${fieldCount} fields` });
+    return z.NEVER;
   }
-  return false;
+
+  const fields = fieldsSchema().safeParse(fieldTexts);
+  if (!fields.success) {
+    for (const issue of fields.error.issues) {
+      context.addIssue({ code: "custom", message: issue.message });
+    }
+    return z.NEVER;
+  }
+
+  const [minutes, hours, daysOfMonth, months, daysOfWeek] = fields.data;
+  if (daysOfWeek.has(alternateSunday)) {
+    daysOfWeek.add(sunday);
+  }
+
+  return {
+    expression,
+    minutes,
+    hours,
+    daysOfMonth,
+    months,
+    daysOfWeek,
+    isDayOfMonthRestricted: fieldTexts[2] !== wildcard,
+    isDayOfWeekRestricted: fieldTexts[4] !== wildcard,
+  };
+}
+
+function fieldsSchema() {
+  return z.tuple([
+    fieldSchema({ minimum: 0, maximum: 59 }),
+    fieldSchema({ minimum: 0, maximum: 23 }),
+    fieldSchema({ minimum: 1, maximum: 31 }),
+    fieldSchema({ minimum: 1, maximum: 12 }),
+    fieldSchema({ minimum: sunday, maximum: alternateSunday }),
+  ]);
+}
+
+function fieldSchema(bounds: FieldBounds) {
+  return z
+    .string()
+    .transform((field) => field.split(","))
+    .pipe(z.array(fieldPartSchema(bounds)))
+    .transform(expandRanges);
+}
+
+function fieldPartSchema(bounds: FieldBounds) {
+  return z
+    .string()
+    .regex(/^(?:\*|\d+(?:-\d+)?)(?:\/\d+)?$/, { error: (issue) => `invalid cron field "${String(issue.input)}"` })
+    .transform((part) => toRange(part, bounds))
+    .refine((range) => isWithinBounds(range, bounds), {
+      error: `invalid cron field: a value falls outside ${bounds.minimum}-${bounds.maximum} or a range runs backwards`,
+    });
+}
+
+function toRange(part: string, { minimum, maximum }: FieldBounds): FieldRange {
+  const [rangeText = "", stepText] = part.split("/");
+  const step = stepText === undefined ? 1 : Number(stepText);
+
+  if (rangeText === wildcard) {
+    return { start: minimum, end: maximum, step };
+  }
+
+  if (rangeText.includes("-")) {
+    const [startText, endText] = rangeText.split("-");
+    return { start: Number(startText), end: Number(endText), step };
+  }
+
+  const start = Number(rangeText);
+  return { start, end: stepText === undefined ? start : maximum, step };
+}
+
+function isWithinBounds({ start, end, step }: FieldRange, { minimum, maximum }: FieldBounds): boolean {
+  return step > 0 && start >= minimum && end <= maximum && start <= end;
+}
+
+function expandRanges(ranges: FieldRange[]): Set<number> {
+  const values = new Set<number>();
+  for (const { start, end, step } of ranges) {
+    for (let value = start; value <= end; value += step) {
+      values.add(value);
+    }
+  }
+
+  return values;
 }

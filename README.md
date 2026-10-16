@@ -75,7 +75,7 @@ Core keys:
 |---|---|---|
 | `schedule` | required | five-field cron expression, in local time |
 | `enabled` | default `true` | `false` stops launches without deleting the agent |
-| `cwd` | default `CADENCE_DEFAULT_CWD` | working directory; `~` expands, relative paths resolve from the spec's directory |
+| `cwd` | default `CADENCE_DEFAULT_CWD`, else the state directory | working directory; `~` expands, relative paths resolve from the spec's directory |
 | `reuse` | default `false` | `true` keeps one resident session; later runs are delivered to it as prompts |
 | `timeout` | default `30m` | how long a non-resident session may run (`s`, `m`, `h`, `d`); not allowed with `reuse` |
 
@@ -96,7 +96,8 @@ Keys owned by the Claude Code runner:
 
 Claude Code asks before working in a directory it has not seen, and a session
 waiting on that question looks idle. Open Claude Code once in each agent's
-`cwd` and accept it before scheduling the agent.
+`cwd` and accept it before scheduling the agent. Your home directory is asked
+about every time, so never use it as an agent's `cwd`.
 
 Any other key is an error, reported once in the dispatch log.
 
@@ -122,18 +123,32 @@ starts and exits.
 
 ## Configuration
 
-`cadence.config.ts` assembles the pieces with factories:
+`cadence.config.ts` declares the environment it reads as a zod schema, then
+assembles the pieces with factories:
 
 ```ts
-export default defineConfig((environment) => ({
-  agentsDirectory: environment.require("CADENCE_AGENTS_DIRECTORY"),
-  stateDirectory: environment.require("CADENCE_STATE_DIRECTORY"),
-  // ...
-  gates: [macosAwake({ settleMinutes: 5 })],
-  terminal: zellij(),
-  runner: claude(),
-}));
+export default defineConfig({
+  environment: z.object({
+    CADENCE_AGENTS_DIRECTORY: settingSchema,
+    CADENCE_STATE_DIRECTORY: settingSchema,
+    // ...
+  }),
+
+  create(environment) {
+    return {
+      agentsDirectory: environment.CADENCE_AGENTS_DIRECTORY,
+      // ...
+      gates: [macosAwake({ settleMinutes: 5 })],
+      terminal: zellij(),
+      runner: claude(),
+    };
+  },
+});
 ```
+
+Values come from the process environment, falling back to `.env` in the
+repository root.
+A missing required setting stops cadence with the setting named.
 
 To support another terminal, agent CLI, or readiness check, implement the
 matching port in `src/core/ports.ts` as an adapter in `src/adapters/` and name

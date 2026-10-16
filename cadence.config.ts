@@ -1,20 +1,27 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { claude } from "./src/adapters/claude.ts";
 import { macosAwake } from "./src/adapters/macos-awake.ts";
 import { zellij } from "./src/adapters/zellij.ts";
-import { defineConfig } from "./src/config.ts";
+import { defineConfig, optionalSettingSchema, settingSchema } from "./src/config.ts";
 
-export default defineConfig((environment) => {
-  const stateDirectory = environment.require("CADENCE_STATE_DIRECTORY");
+export default defineConfig({
+  environment: z.object({
+    CADENCE_AGENTS_DIRECTORY: settingSchema,
+    CADENCE_STATE_DIRECTORY: settingSchema,
+    CADENCE_LOG_DIRECTORY: optionalSettingSchema,
+    CADENCE_DEFAULT_CWD: optionalSettingSchema,
+  }),
 
-  return {
-    agentsDirectory: environment.require("CADENCE_AGENTS_DIRECTORY"),
-    stateDirectory,
-    logDirectory: environment.optional("CADENCE_LOG_DIRECTORY") ?? join(stateDirectory, "logs"),
-    defaultCwd: environment.optional("CADENCE_DEFAULT_CWD") ?? homedir(),
-    gates: [macosAwake({ settleMinutes: 5 })],
-    terminal: zellij(),
-    runner: claude(),
-  };
+  create(environment) {
+    return {
+      agentsDirectory: environment.CADENCE_AGENTS_DIRECTORY,
+      stateDirectory: environment.CADENCE_STATE_DIRECTORY,
+      logDirectory: environment.CADENCE_LOG_DIRECTORY ?? join(environment.CADENCE_STATE_DIRECTORY, "logs"),
+      defaultCwd: environment.CADENCE_DEFAULT_CWD ?? environment.CADENCE_STATE_DIRECTORY,
+      gates: [macosAwake({ settleMinutes: 5 })],
+      terminal: zellij(),
+      runner: claude(),
+    };
+  },
 });

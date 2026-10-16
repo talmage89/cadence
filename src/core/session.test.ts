@@ -3,77 +3,99 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { temporaryDirectory } from "../testing/fakes.ts";
-import { acquireSession, isProcessAlive, readLiveSession, releaseSession } from "./session.ts";
+import { temporaryDirectory } from "#testing/fakes.ts";
+import { acquireSession, isProcessAlive, readLiveSession, releaseSession, type SessionRecord } from "./session.ts";
 
-function deadPid(): number {
+function exitedPid(): number {
   const { pid } = spawnSync(process.execPath, ["-e", ""]);
   assert.ok(pid);
   return pid;
 }
 
-function record(pid: number) {
+function record(pid: number): SessionRecord {
   return { pid, startedAt: "2026-10-16T09:00:00.000Z", handle: { pane: "1" } };
 }
 
 describe("isProcessAlive", () => {
-  it("is true for this process and false for an exited one", () => {
+  it("should be true for this process and false for an exited one", () => {
     assert.equal(isProcessAlive(process.pid), true);
-    assert.equal(isProcessAlive(deadPid()), false);
+    assert.equal(isProcessAlive(exitedPid()), false);
   });
 });
 
 describe("acquireSession", () => {
-  it("creates a record that readLiveSession returns", () => {
+  it("should create a record that readLiveSession returns", () => {
     const directory = temporaryDirectory();
-    assert.equal(acquireSession(directory, "agent", record(process.pid)), true);
+
+    const isAcquired = acquireSession(directory, "agent", record(process.pid));
+
+    assert.equal(isAcquired, true);
     assert.deepEqual(readLiveSession(directory, "agent"), record(process.pid));
   });
 
-  it("refuses while a live process holds the record", () => {
+  it("should refuse while a live process holds the record", () => {
     const directory = temporaryDirectory();
     acquireSession(directory, "agent", record(process.pid));
+
     assert.equal(acquireSession(directory, "agent", record(process.pid + 1)), false);
   });
 
-  it("reclaims a record left by a dead process", () => {
+  it("should reclaim a record left by an exited process", () => {
     const directory = temporaryDirectory();
-    acquireSession(directory, "agent", record(deadPid()));
-    assert.equal(readLiveSession(directory, "agent"), null);
-    assert.equal(acquireSession(directory, "agent", record(process.pid)), true);
+    acquireSession(directory, "agent", record(exitedPid()));
+
+    const isAcquired = acquireSession(directory, "agent", record(process.pid));
+
+    assert.equal(isAcquired, true);
     assert.equal(readLiveSession(directory, "agent")?.pid, process.pid);
   });
 
-  it("reclaims an unreadable record", () => {
+  it("should reclaim an unreadable record", () => {
     const directory = temporaryDirectory();
     writeFileSync(join(directory, "agent.json"), "{not json");
+
     assert.equal(acquireSession(directory, "agent", record(process.pid)), true);
   });
 
-  it("leaves no temporary files behind", () => {
+  it("should leave no temporary files behind", () => {
     const directory = temporaryDirectory();
+
     acquireSession(directory, "agent", record(process.pid));
     acquireSession(directory, "agent", record(process.pid));
+
     assert.deepEqual(readdirSync(directory), ["agent.json"]);
   });
 });
 
+describe("readLiveSession", () => {
+  it("should ignore a record whose process has exited", () => {
+    const directory = temporaryDirectory();
+    acquireSession(directory, "agent", record(exitedPid()));
+
+    assert.equal(readLiveSession(directory, "agent"), null);
+  });
+});
+
 describe("releaseSession", () => {
-  it("removes the record its holder owns", () => {
+  it("should remove the record its holder owns", () => {
     const directory = temporaryDirectory();
     acquireSession(directory, "agent", record(process.pid));
+
     releaseSession(directory, "agent", process.pid);
+
     assert.equal(existsSync(join(directory, "agent.json")), false);
   });
 
-  it("leaves another holder's record alone", () => {
+  it("should leave another holder's record alone", () => {
     const directory = temporaryDirectory();
     acquireSession(directory, "agent", record(process.pid));
+
     releaseSession(directory, "agent", process.pid + 1);
+
     assert.equal(existsSync(join(directory, "agent.json")), true);
   });
 
-  it("tolerates a missing record", () => {
+  it("should tolerate a missing record", () => {
     assert.doesNotThrow(() => releaseSession(temporaryDirectory(), "agent", process.pid));
   });
 });

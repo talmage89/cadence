@@ -1,6 +1,7 @@
 import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { jsonSchema } from "./validation.ts";
 
 const sessionRecordSchema = z.object({
   pid: z.number().int().positive(),
@@ -10,12 +11,32 @@ const sessionRecordSchema = z.object({
 
 export type SessionRecord = z.output<typeof sessionRecordSchema>;
 
-function recordFile(directory: string, name: string): string {
-  return join(directory, `${name}.json`);
+export function acquireSession(directory: string, name: string, record: SessionRecord): boolean {
+  mkdirSync(directory, { recursive: true });
+  const file = recordFile(directory, name);
+
+  if (tryCreateRecord(file, record)) {
+    return true;
+  }
+
+  if (readLiveSession(directory, name)) {
+    return false;
+  }
+
+  removeFile(file);
+  return tryCreateRecord(file, record);
 }
 
-function isErrorWithCode(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && error.code === code;
+export function readLiveSession(directory: string, name: string): SessionRecord | null {
+  const record = readRecord(recordFile(directory, name));
+  return record !== null && isProcessAlive(record.pid) ? record : null;
+}
+
+export function releaseSession(directory: string, name: string, pid: number): void {
+  const file = recordFile(directory, name);
+  if (readRecord(file)?.pid === pid) {
+    removeFile(file);
+  }
 }
 
 export function isProcessAlive(pid: number): boolean {
@@ -23,25 +44,14 @@ export function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return isErrorWithCode(error, "EPERM");
+    return hasErrorCode(error, "EPERM");
   }
 }
 
-function readRecord(file: string): SessionRecord | null {
-  try {
-    const result = sessionRecordSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
-    return result.success ? result.data : null;
-  } catch {
-    return null;
-  }
-}
+const recordFileSchema = jsonSchema(sessionRecordSchema);
 
-function removeFile(file: string): void {
-  try {
-    unlinkSync(file);
-  } catch (error) {
-    if (!isErrorWithCode(error, "ENOENT")) throw error;
-  }
+function recordFile(directory: string, name: string): string {
+  return join(directory, `${name}.json`);
 }
 
 function tryCreateRecord(file: string, record: SessionRecord): boolean {
@@ -52,30 +62,37 @@ function tryCreateRecord(file: string, record: SessionRecord): boolean {
     linkSync(temporaryFile, file);
     return true;
   } catch (error) {
-    if (isErrorWithCode(error, "EEXIST")) return false;
+    if (hasErrorCode(error, "EEXIST")) {
+      return false;
+    }
     throw error;
   } finally {
     removeFile(temporaryFile);
   }
 }
 
-export function readLiveSession(directory: string, name: string): SessionRecord | null {
-  const record = readRecord(recordFile(directory, name));
-  return record && isProcessAlive(record.pid) ? record : null;
+function readRecord(file: string): SessionRecord | null {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+
+  const result = recordFileSchema.safeParse(text);
+  return result.success ? result.data : null;
 }
 
-export function acquireSession(directory: string, name: string, record: SessionRecord): boolean {
-  mkdirSync(directory, { recursive: true });
-  const file = recordFile(directory, name);
-
-  if (tryCreateRecord(file, record)) return true;
-  if (readLiveSession(directory, name)) return false;
-
-  removeFile(file);
-  return tryCreateRecord(file, record);
+function removeFile(file: string): void {
+  try {
+    unlinkSync(file);
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
 }
 
-export function releaseSession(directory: string, name: string, pid: number): void {
-  const file = recordFile(directory, name);
-  if (readRecord(file)?.pid === pid) removeFile(file);
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code;
 }
