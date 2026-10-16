@@ -37,8 +37,8 @@ sed -e "s|{{LABEL}}|local.cadence|" \
 launchctl load ~/Library/LaunchAgents/local.cadence.plist
 ```
 
-The `PATH` you bake in is the one agents see when cadence creates their
-terminal session, so it must reach your terminal and agent CLI.
+The `PATH` you bake in is the dispatcher's own, so it must reach your terminal
+(`zellij`). Agents get their environment from your login shell instead.
 
 ## Commands
 
@@ -83,7 +83,13 @@ Keys owned by the zellij terminal:
 
 | Key | | |
 |---|---|---|
-| `zellij` | required | session to open the agent's tab in; created in the background if missing |
+| `zellij` | required | session to open the agent's tab in; it must already be running |
+
+Start the session yourself, from your terminal, and leave it running; cadence
+never creates one. A due agent whose session is missing waits, and the dispatch
+log says which session to start. Each agent runs through your login shell
+(`$SHELL -lic`), exactly like a pane you open by hand, so it sees your full
+environment whatever environment the session itself was started with.
 
 Keys owned by the Claude Code runner:
 

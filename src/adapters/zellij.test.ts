@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 import { zellij } from "./zellij.ts";
 
@@ -38,6 +39,7 @@ function fakeZellij({ sessions = "", panes = "[]", tabId = "4", isListingBroken 
 
 const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { zellij: "agents" } };
 const handle = { session: "agents", paneId: "terminal_5" };
+const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
 
 describe("zellij", () => {
   describe("options", () => {
@@ -71,31 +73,40 @@ describe("zellij", () => {
   });
 
   describe("open", () => {
-    it("should open a named tab and run the command in a pane of it", () => {
+    it("should open a named tab and run the command in a pane of it through the login shell", () => {
       const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago]" });
 
       terminal.open(openRequest);
 
       assert.deepEqual(calls.slice(1), [
         ["--session", "agents", "action", "new-tab", "--name", "digest", "--layout-string", 'layout {\n  pane command="sleep" close_on_exit=true {\n    args "3"\n  }\n}'],
-        ["--session", "agents", "run", "--tab-id", "4", "--cwd", "/work", "--name", "digest", "--close-on-exit", "--", "node", "cli.ts", "run", "digest"],
+        ["--session", "agents", "run", "--tab-id", "4", "--cwd", "/work", "--name", "digest", "--close-on-exit", "--", "/bin/sh", "-c", loginShellScript, "cadence", "node", "cli.ts", "run", "digest"],
       ]);
     });
 
-    it("should create the session in the background when it does not exist", () => {
-      const { calls, terminal } = fakeZellij({ sessions: "main [Created 1h ago]" });
+    it("should hand the command its arguments intact through the login shell", () => {
+      const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago]" });
+      terminal.open({ ...openRequest, command: ["/bin/sh", "-c", 'printf "[%s]" "$@"', "probe", "two words", "it's quoted"] });
+      const runCall = calls.at(-1) ?? [];
+      const [executable = "", ...commandArguments] = runCall.slice(runCall.indexOf("--") + 1);
 
-      terminal.open(openRequest);
+      const { stdout } = spawnSync(executable, commandArguments, { encoding: "utf8", env: { PATH: "/usr/bin:/bin", SHELL: "/bin/sh" } });
 
-      assert.deepEqual(calls[1], ["attach", "--create-background", "agents"]);
+      assert.equal(stdout, "[two words][it's quoted]");
     });
 
-    it("should replace an exited session before opening", () => {
+    it("should refuse to open anything when the session is not running", () => {
+      const { calls, terminal } = fakeZellij({ sessions: "main [Created 1h ago]" });
+
+      assert.throws(() => terminal.open(openRequest), /zellij session "agents" is not running; start it from your terminal/);
+      assert.equal(calls.length, 1);
+    });
+
+    it("should refuse to open anything when the session has exited", () => {
       const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago] (EXITED - attach to resurrect)" });
 
-      terminal.open(openRequest);
-
-      assert.deepEqual(calls.slice(1, 3), [["delete-session", "agents"], ["attach", "--create-background", "agents"]]);
+      assert.throws(() => terminal.open(openRequest), /is not running/);
+      assert.equal(calls.length, 1);
     });
 
     it("should refuse to run anything when zellij returns an unexpected tab id", () => {

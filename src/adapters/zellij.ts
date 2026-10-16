@@ -24,10 +24,10 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
     },
 
     open({ title, cwd, command, options: { zellij: sessionName } }) {
-      ensureSession(execute, sessionName);
+      requireLiveSession(execute, sessionName);
 
       const tabId = parseOrThrow(tabIdSchema, execute(["--session", sessionName, "action", "new-tab", "--name", title, "--layout-string", placeholderLayout]));
-      execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...command]);
+      execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...throughLoginShell(command)]);
     },
 
     currentHandle(environment) {
@@ -54,6 +54,7 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
 const exitedMarker = "EXITED";
 const terminalPanePrefix = "terminal_";
 const placeholderSeconds = 3;
+const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
 
 const placeholderLayout = `layout {\n  pane command="sleep" close_on_exit=true {\n    args "${placeholderSeconds}"\n  }\n}`;
 
@@ -94,16 +95,14 @@ function isSessionLive(execute: ZellijExecutor, sessionName: string): boolean {
   return listSessions(execute).some((session) => session.name === sessionName && !session.isExited);
 }
 
-function ensureSession(execute: ZellijExecutor, sessionName: string): void {
-  const existingSession = listSessions(execute).find((session) => session.name === sessionName);
-  if (existingSession && !existingSession.isExited) {
-    return;
+function requireLiveSession(execute: ZellijExecutor, sessionName: string): void {
+  if (!isSessionLive(execute, sessionName)) {
+    throw new Error(`zellij session "${sessionName}" is not running; start it from your terminal`);
   }
+}
 
-  if (existingSession) {
-    execute(["delete-session", sessionName]);
-  }
-  execute(["attach", "--create-background", sessionName]);
+function throughLoginShell(command: string[]): string[] {
+  return ["/bin/sh", "-c", loginShellScript, "cadence", ...command];
 }
 
 function toPaneId(paneNumber: number | string): string {
