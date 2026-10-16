@@ -67,36 +67,6 @@ describe("supervise", () => {
       assert.deepEqual(heldRecord.handle, { pane: "9" });
       assert.equal(existsSync(recordFile(runtime)), false);
     });
-
-    it("should close its terminal session once the agent has exited", async () => {
-      const terminal = fakeTerminal();
-      terminal.environmentHandle = { pane: "9" };
-      const runtime = fakeRuntime({ terminal });
-
-      await supervise(agentSpec(""), runtime);
-
-      assert.deepEqual(terminal.closed, ["9"]);
-    });
-
-    it("should leave the terminal alone when it recorded no handle", async () => {
-      const terminal = fakeTerminal();
-      const runtime = fakeRuntime({ terminal });
-
-      await supervise(agentSpec(""), runtime);
-
-      assert.deepEqual(terminal.closed, []);
-    });
-
-    it("should log a terminal that fails to close", async () => {
-      const terminal = fakeTerminal();
-      terminal.environmentHandle = { pane: "9" };
-      terminal.closeError = new Error("tab vanished");
-      const runtime = fakeRuntime({ terminal });
-
-      await supervise(agentSpec(""), runtime);
-
-      assert.equal(agentLogMessages(runtime).at(-1), "could not close the terminal session: tab vanished");
-    });
   });
 
   describe("lifetime", () => {

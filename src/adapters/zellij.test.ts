@@ -5,12 +5,19 @@ import { zellij } from "./zellij.ts";
 
 interface FakeZellijParams {
   sessions?: string;
+  tabs?: string;
   panes?: string;
-  tabId?: string;
+  runPaneId?: string;
   isListingBroken?: boolean;
 }
 
-function fakeZellij({ sessions = "", panes = "[]", tabId = "4", isListingBroken = false }: FakeZellijParams = {}) {
+const liveAgentsSession = "agents [Created 1h ago]";
+const twoTabs = JSON.stringify([
+  { tab_id: 4, position: 1 },
+  { tab_id: 0, position: 0 },
+]);
+
+function fakeZellij({ sessions = "", tabs = twoTabs, panes = "[]", runPaneId = "terminal_7", isListingBroken = false }: FakeZellijParams = {}) {
   const calls: string[][] = [];
   const terminal = zellij({
     execute(zellijArguments) {
@@ -23,18 +30,26 @@ function fakeZellij({ sessions = "", panes = "[]", tabId = "4", isListingBroken 
         return sessions;
       }
 
-      if (zellijArguments.includes("new-tab")) {
-        return tabId;
+      if (zellijArguments.includes("list-tabs")) {
+        return tabs;
       }
 
       if (zellijArguments.includes("list-panes")) {
         return panes;
       }
 
+      if (zellijArguments[2] === "run") {
+        return runPaneId;
+      }
+
       return "";
     },
   });
   return { calls, terminal };
+}
+
+function findRunCall(calls: string[][]): string[] {
+  return calls.find((call) => call[2] === "run") ?? [];
 }
 
 const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { zellij: "agents" } };
@@ -73,21 +88,46 @@ describe("zellij", () => {
   });
 
   describe("open", () => {
-    it("should open a named tab and run the command in a pane of it through the login shell", () => {
-      const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago]" });
+    it("should run the command through the login shell in the session's first tab", () => {
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession });
 
       terminal.open(openRequest);
 
-      assert.deepEqual(calls.slice(1), [
-        ["--session", "agents", "action", "new-tab", "--name", "digest", "--cwd", "/work", "--close-on-exit", "--", "sleep", "3"],
-        ["--session", "agents", "run", "--tab-id", "4", "--cwd", "/work", "--name", "digest", "--close-on-exit", "--", "/bin/sh", "-c", loginShellScript, "cadence", "node", "cli.ts", "run", "digest"],
+      assert.deepEqual(findRunCall(calls), [
+        "--session", "agents", "run", "--tab-id", "0", "--cwd", "/work", "--name", "digest", "--close-on-exit", "--",
+        "/bin/sh", "-c", loginShellScript, "cadence", "node", "cli.ts", "run", "digest",
       ]);
+      assert.equal(calls.some((call) => call.includes("new-tab")), false);
+    });
+
+    it("should stack the new pane with the first tab's other live panes", () => {
+      const panes = JSON.stringify([
+        { id: 0, tab_id: 0, is_plugin: false, exited: false },
+        { id: 3, tab_id: 0, is_plugin: false, exited: true },
+        { id: 9, tab_id: 0, is_plugin: true, exited: false },
+        { id: 5, tab_id: 4, is_plugin: false, exited: false },
+        { id: 7, tab_id: 0, is_plugin: false, exited: false },
+      ]);
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession, panes });
+
+      terminal.open(openRequest);
+
+      assert.deepEqual(calls.at(-1), ["--session", "agents", "action", "stack-panes", "--", "terminal_0", "terminal_7"]);
+    });
+
+    it("should not stack a pane that is alone in its tab", () => {
+      const panes = JSON.stringify([{ id: 7, tab_id: 0, is_plugin: false, exited: false }]);
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession, panes });
+
+      terminal.open(openRequest);
+
+      assert.equal(calls.some((call) => call.includes("stack-panes")), false);
     });
 
     it("should hand the command its arguments intact through the login shell", () => {
-      const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago]" });
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession });
       terminal.open({ ...openRequest, command: ["/bin/sh", "-c", 'printf "[%s]" "$@"', "probe", "two words", "it's quoted"] });
-      const runCall = calls.at(-1) ?? [];
+      const runCall = findRunCall(calls);
       const [executable = "", ...commandArguments] = runCall.slice(runCall.indexOf("--") + 1);
 
       const { stdout } = spawnSync(executable, commandArguments, { encoding: "utf8", env: { PATH: "/usr/bin:/bin", SHELL: "/bin/sh" } });
@@ -109,11 +149,17 @@ describe("zellij", () => {
       assert.equal(calls.length, 1);
     });
 
-    it("should refuse to run anything when zellij returns an unexpected tab id", () => {
-      const { calls, terminal } = fakeZellij({ sessions: "agents [Created 1h ago]", tabId: "oops" });
+    it("should report a session with no tabs", () => {
+      const { terminal } = fakeZellij({ sessions: liveAgentsSession, tabs: "[]" });
 
-      assert.throws(() => terminal.open(openRequest), /unexpected tab id: oops/);
-      assert.equal(calls.some((call) => call.includes("run")), false);
+      assert.throws(() => terminal.open(openRequest), /has no tabs/);
+    });
+
+    it("should not stack anything when zellij returns an unexpected pane id", () => {
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession, runPaneId: "oops" });
+
+      assert.throws(() => terminal.open(openRequest), /unexpected pane id: oops/);
+      assert.equal(calls.some((call) => call.includes("stack-panes")), false);
     });
   });
 
@@ -135,25 +181,25 @@ describe("zellij", () => {
   describe("isLive", () => {
     it("should be true when the pane is listed and running", () => {
       const panes = JSON.stringify([
-        { id: 0, tab_id: 1, is_plugin: true, exited: false, title: "status" },
-        { id: 5, tab_id: 1, is_plugin: false, exited: false, title: "digest" },
+        { id: 0, tab_id: 0, is_plugin: true, exited: false, title: "status" },
+        { id: 5, tab_id: 0, is_plugin: false, exited: false, title: "digest" },
       ]);
-      const { terminal } = fakeZellij({ sessions: "agents [Created 1h ago]", panes });
+      const { terminal } = fakeZellij({ sessions: liveAgentsSession, panes });
 
       assert.equal(terminal.isLive(handle), true);
     });
 
     it("should be false when the pane has exited or is missing", () => {
-      const exitedPanes = JSON.stringify([{ id: 5, tab_id: 1, is_plugin: false, exited: true }]);
+      const exitedPanes = JSON.stringify([{ id: 5, tab_id: 0, is_plugin: false, exited: true }]);
 
-      assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes: exitedPanes }).terminal.isLive(handle), false);
-      assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes: "[]" }).terminal.isLive(handle), false);
+      assert.equal(fakeZellij({ sessions: liveAgentsSession, panes: exitedPanes }).terminal.isLive(handle), false);
+      assert.equal(fakeZellij({ sessions: liveAgentsSession, panes: "[]" }).terminal.isLive(handle), false);
     });
 
     it("should not match a plugin pane with the same number", () => {
-      const panes = JSON.stringify([{ id: 5, tab_id: 1, is_plugin: true, exited: false }]);
+      const panes = JSON.stringify([{ id: 5, tab_id: 0, is_plugin: true, exited: false }]);
 
-      assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes }).terminal.isLive(handle), false);
+      assert.equal(fakeZellij({ sessions: liveAgentsSession, panes }).terminal.isLive(handle), false);
     });
 
     it("should be false without listing panes when the session is gone", () => {
@@ -161,46 +207,6 @@ describe("zellij", () => {
 
       assert.equal(terminal.isLive(handle), false);
       assert.equal(calls.some((call) => call.includes("list-panes")), false);
-    });
-  });
-
-  describe("close", () => {
-    const sessions = "agents [Created 1h ago]";
-
-    it("should close the tab holding the agent's pane", () => {
-      const panes = JSON.stringify([
-        { id: 9, tab_id: 3, is_plugin: true, exited: false },
-        { id: 5, tab_id: 3, is_plugin: false, exited: false },
-        { id: 1, tab_id: 0, is_plugin: false, exited: false },
-      ]);
-      const { calls, terminal } = fakeZellij({ sessions, panes });
-
-      terminal.close(handle);
-
-      assert.deepEqual(calls.at(-1), ["--session", "agents", "action", "close-tab-by-id", "3"]);
-    });
-
-    it("should leave the tab open when another live pane shares it", () => {
-      const panes = JSON.stringify([
-        { id: 5, tab_id: 3, is_plugin: false, exited: false },
-        { id: 6, tab_id: 3, is_plugin: false, exited: false },
-      ]);
-      const { calls, terminal } = fakeZellij({ sessions, panes });
-
-      terminal.close(handle);
-
-      assert.equal(calls.some((call) => call.includes("close-tab-by-id")), false);
-    });
-
-    it("should do nothing when the pane or the session is already gone", () => {
-      const withoutPane = fakeZellij({ sessions, panes: "[]" });
-      const withoutSession = fakeZellij({ sessions: "main [Created 1h ago]" });
-
-      withoutPane.terminal.close(handle);
-      withoutSession.terminal.close(handle);
-
-      assert.equal(withoutPane.calls.some((call) => call.includes("close-tab-by-id")), false);
-      assert.equal(withoutSession.calls.some((call) => call.includes("list-panes")), false);
     });
   });
 

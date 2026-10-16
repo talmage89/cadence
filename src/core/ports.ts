@@ -20,8 +20,6 @@ export interface Terminal<OptionsSchema extends z.ZodObject = z.ZodObject, Handl
   isLive(handle: z.output<HandleSchema>): boolean;
   /** Types `text` into the session as a submitted prompt. */
   deliver(handle: z.output<HandleSchema>, text: string): void;
-  /** Called from inside the session once its agent has exited: removes what `open` created. May end the calling process. */
-  close(handle: z.output<HandleSchema>): void;
 }
 
 /** The agent CLI. Owns the frontmatter keys in `options`. */

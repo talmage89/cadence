@@ -29,19 +29,6 @@ export async function supervise(spec: AgentSpec, runtime: Runtime): Promise<numb
     return 1;
   } finally {
     releaseSession(directory, spec.name, record.pid);
-    closeTerminalSession(runtime, record.handle, log);
-  }
-}
-
-function closeTerminalSession(runtime: Runtime, handle: unknown, log: string): void {
-  if (handle === null) {
-    return;
-  }
-
-  try {
-    runtime.terminal.close(handle);
-  } catch (error) {
-    appendLog(log, `could not close the terminal session: ${describeError(error)}`);
   }
 }
 

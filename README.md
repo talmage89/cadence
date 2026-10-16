@@ -93,8 +93,11 @@ never creates one. A due agent whose session is missing waits, and the dispatch
 log says which session to start. Each agent runs through your login shell
 (`$SHELL -lic`), exactly like a pane you open by hand, so it sees your full
 environment whatever environment the session itself was started with.
-Each agent gets its own tab, opened with your default tab template and closed
-when the agent exits, unless you have opened other panes in it.
+
+Each agent runs as a pane in the session's first tab, stacked with the panes
+already there, so the tab keeps your layout whether or not you are attached.
+An agent's pane closes when the agent exits; cadence never creates or closes
+tabs.
 
 Keys owned by the Claude Code runner:
 

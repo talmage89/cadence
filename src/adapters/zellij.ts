@@ -26,11 +26,13 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
     open({ title, cwd, command, options: { zellij: sessionName } }) {
       requireLiveSession(execute, sessionName);
 
-      const tabId = parseOrThrow(
-        tabIdSchema,
-        execute(["--session", sessionName, "action", "new-tab", "--name", title, "--cwd", cwd, "--close-on-exit", "--", ...placeholderCommand]),
+      const tabId = findFirstTabId(execute, sessionName);
+      const paneId = parseOrThrow(
+        paneIdSchema,
+        execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...throughLoginShell(command)]),
       );
-      execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--close-on-exit", "--", ...throughLoginShell(command)]);
+
+      stackTab(execute, sessionName, tabId, paneId);
     },
 
     currentHandle(environment) {
@@ -50,31 +52,11 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
       execute(["--session", session, "action", "paste", "--pane-id", paneId, text]);
       execute(["--session", session, "action", "send-keys", "--pane-id", paneId, "Enter"]);
     },
-
-    close({ session, paneId }: ZellijHandle) {
-      if (!isSessionLive(execute, session)) {
-        return;
-      }
-
-      const panes = listTerminalPanes(execute, session);
-      const ownPane = panes.find((pane) => toPaneId(pane.id) === paneId);
-      if (!ownPane) {
-        return;
-      }
-
-      const sharesTab = panes.some((pane) => pane.tab_id === ownPane.tab_id && pane !== ownPane && !pane.exited);
-      if (sharesTab) {
-        return;
-      }
-
-      execute(["--session", session, "action", "close-tab-by-id", String(ownPane.tab_id)]);
-    },
   };
 }
 
 const exitedMarker = "EXITED";
 const terminalPanePrefix = "terminal_";
-const placeholderCommand = ["sleep", "3"];
 const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
 
 const sessionLineSchema = z
@@ -87,9 +69,11 @@ const sessionsSchema = z
   .transform((output) => output.split("\n").filter(Boolean))
   .pipe(z.array(sessionLineSchema));
 
-const tabIdSchema = z.string().regex(/^\d+$/, { error: (issue) => `zellij returned an unexpected tab id: ${String(issue.input)}` });
+const tabsSchema = jsonSchema(z.array(z.looseObject({ tab_id: z.number(), position: z.number() })));
 
 const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), tab_id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
+
+const paneIdSchema = z.string().regex(/^terminal_\d+$/, { error: (issue) => `zellij returned an unexpected pane id: ${String(issue.input)}` });
 
 const paneEnvironmentSchema = z
   .object({ ZELLIJ_SESSION_NAME: z.string().min(1), ZELLIJ_PANE_ID: z.string().regex(/^\d+$/) })
@@ -114,19 +98,41 @@ function isSessionLive(execute: ZellijExecutor, sessionName: string): boolean {
   return listSessions(execute).some((session) => session.name === sessionName && !session.isExited);
 }
 
-function listTerminalPanes(execute: ZellijExecutor, sessionName: string): z.output<typeof panesSchema> {
-  const panes = parseOrThrow(panesSchema, execute(["--session", sessionName, "action", "list-panes", "--json", "--all"]));
-  return panes.filter((pane) => !pane.is_plugin);
-}
-
 function requireLiveSession(execute: ZellijExecutor, sessionName: string): void {
   if (!isSessionLive(execute, sessionName)) {
     throw new Error(`zellij session "${sessionName}" is not running; start it from your terminal`);
   }
 }
 
+function findFirstTabId(execute: ZellijExecutor, sessionName: string): string {
+  const tabs = parseOrThrow(tabsSchema, execute(["--session", sessionName, "action", "list-tabs", "--json"]));
+  const [firstTab] = tabs.toSorted((earlier, later) => earlier.position - later.position);
+  if (!firstTab) {
+    throw new Error(`zellij session "${sessionName}" has no tabs`);
+  }
+
+  return String(firstTab.tab_id);
+}
+
 function throughLoginShell(command: string[]): string[] {
   return ["/bin/sh", "-c", loginShellScript, "cadence", ...command];
+}
+
+function stackTab(execute: ZellijExecutor, sessionName: string, tabId: string, newPaneId: string): void {
+  const tabPaneIds = listTerminalPanes(execute, sessionName)
+    .filter((pane) => String(pane.tab_id) === tabId && !pane.exited)
+    .map((pane) => toPaneId(pane.id))
+    .filter((paneId) => paneId !== newPaneId);
+  if (tabPaneIds.length === 0) {
+    return;
+  }
+
+  execute(["--session", sessionName, "action", "stack-panes", "--", ...tabPaneIds, newPaneId]);
+}
+
+function listTerminalPanes(execute: ZellijExecutor, sessionName: string): z.output<typeof panesSchema> {
+  const panes = parseOrThrow(panesSchema, execute(["--session", sessionName, "action", "list-panes", "--json", "--all"]));
+  return panes.filter((pane) => !pane.is_plugin);
 }
 
 function toPaneId(paneNumber: number | string): string {
