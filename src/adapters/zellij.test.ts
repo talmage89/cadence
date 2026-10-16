@@ -135,8 +135,8 @@ describe("zellij", () => {
   describe("isLive", () => {
     it("should be true when the pane is listed and running", () => {
       const panes = JSON.stringify([
-        { id: 0, is_plugin: true, exited: false, title: "status" },
-        { id: 5, is_plugin: false, exited: false, title: "digest" },
+        { id: 0, tab_id: 1, is_plugin: true, exited: false, title: "status" },
+        { id: 5, tab_id: 1, is_plugin: false, exited: false, title: "digest" },
       ]);
       const { terminal } = fakeZellij({ sessions: "agents [Created 1h ago]", panes });
 
@@ -144,14 +144,14 @@ describe("zellij", () => {
     });
 
     it("should be false when the pane has exited or is missing", () => {
-      const exitedPanes = JSON.stringify([{ id: 5, is_plugin: false, exited: true }]);
+      const exitedPanes = JSON.stringify([{ id: 5, tab_id: 1, is_plugin: false, exited: true }]);
 
       assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes: exitedPanes }).terminal.isLive(handle), false);
       assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes: "[]" }).terminal.isLive(handle), false);
     });
 
     it("should not match a plugin pane with the same number", () => {
-      const panes = JSON.stringify([{ id: 5, is_plugin: true, exited: false }]);
+      const panes = JSON.stringify([{ id: 5, tab_id: 1, is_plugin: true, exited: false }]);
 
       assert.equal(fakeZellij({ sessions: "agents [Created 1h ago]", panes }).terminal.isLive(handle), false);
     });
@@ -161,6 +161,46 @@ describe("zellij", () => {
 
       assert.equal(terminal.isLive(handle), false);
       assert.equal(calls.some((call) => call.includes("list-panes")), false);
+    });
+  });
+
+  describe("close", () => {
+    const sessions = "agents [Created 1h ago]";
+
+    it("should close the tab holding the agent's pane", () => {
+      const panes = JSON.stringify([
+        { id: 9, tab_id: 3, is_plugin: true, exited: false },
+        { id: 5, tab_id: 3, is_plugin: false, exited: false },
+        { id: 1, tab_id: 0, is_plugin: false, exited: false },
+      ]);
+      const { calls, terminal } = fakeZellij({ sessions, panes });
+
+      terminal.close(handle);
+
+      assert.deepEqual(calls.at(-1), ["--session", "agents", "action", "close-tab-by-id", "3"]);
+    });
+
+    it("should leave the tab open when another live pane shares it", () => {
+      const panes = JSON.stringify([
+        { id: 5, tab_id: 3, is_plugin: false, exited: false },
+        { id: 6, tab_id: 3, is_plugin: false, exited: false },
+      ]);
+      const { calls, terminal } = fakeZellij({ sessions, panes });
+
+      terminal.close(handle);
+
+      assert.equal(calls.some((call) => call.includes("close-tab-by-id")), false);
+    });
+
+    it("should do nothing when the pane or the session is already gone", () => {
+      const withoutPane = fakeZellij({ sessions, panes: "[]" });
+      const withoutSession = fakeZellij({ sessions: "main [Created 1h ago]" });
+
+      withoutPane.terminal.close(handle);
+      withoutSession.terminal.close(handle);
+
+      assert.equal(withoutPane.calls.some((call) => call.includes("close-tab-by-id")), false);
+      assert.equal(withoutSession.calls.some((call) => call.includes("list-panes")), false);
     });
   });
 

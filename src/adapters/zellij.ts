@@ -43,13 +43,31 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
         return false;
       }
 
-      const panes = parseOrThrow(panesSchema, execute(["--session", session, "action", "list-panes", "--json", "--all"]));
-      return panes.some((pane) => !pane.is_plugin && !pane.exited && toPaneId(pane.id) === paneId);
+      return listTerminalPanes(execute, session).some((pane) => !pane.exited && toPaneId(pane.id) === paneId);
     },
 
     deliver({ session, paneId }: ZellijHandle, text) {
       execute(["--session", session, "action", "paste", "--pane-id", paneId, text]);
       execute(["--session", session, "action", "send-keys", "--pane-id", paneId, "Enter"]);
+    },
+
+    close({ session, paneId }: ZellijHandle) {
+      if (!isSessionLive(execute, session)) {
+        return;
+      }
+
+      const panes = listTerminalPanes(execute, session);
+      const ownPane = panes.find((pane) => toPaneId(pane.id) === paneId);
+      if (!ownPane) {
+        return;
+      }
+
+      const sharesTab = panes.some((pane) => pane.tab_id === ownPane.tab_id && pane !== ownPane && !pane.exited);
+      if (sharesTab) {
+        return;
+      }
+
+      execute(["--session", session, "action", "close-tab-by-id", String(ownPane.tab_id)]);
     },
   };
 }
@@ -71,7 +89,7 @@ const sessionsSchema = z
 
 const tabIdSchema = z.string().regex(/^\d+$/, { error: (issue) => `zellij returned an unexpected tab id: ${String(issue.input)}` });
 
-const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
+const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), tab_id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
 
 const paneEnvironmentSchema = z
   .object({ ZELLIJ_SESSION_NAME: z.string().min(1), ZELLIJ_PANE_ID: z.string().regex(/^\d+$/) })
@@ -94,6 +112,11 @@ function listSessions(execute: ZellijExecutor): z.output<typeof sessionsSchema> 
 
 function isSessionLive(execute: ZellijExecutor, sessionName: string): boolean {
   return listSessions(execute).some((session) => session.name === sessionName && !session.isExited);
+}
+
+function listTerminalPanes(execute: ZellijExecutor, sessionName: string): z.output<typeof panesSchema> {
+  const panes = parseOrThrow(panesSchema, execute(["--session", sessionName, "action", "list-panes", "--json", "--all"]));
+  return panes.filter((pane) => !pane.is_plugin);
 }
 
 function requireLiveSession(execute: ZellijExecutor, sessionName: string): void {
