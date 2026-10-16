@@ -4,8 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fakeTerminal, nodeRunner, temporaryDirectory, writeSpec } from "#testing/fakes.ts";
-import { minuteMilliseconds } from "./duration.ts";
-import { type AgentSpec, instructionsPrompt, LifetimeKind, loadSpecs, parseSpec, type SpecContext, SpecLoadKind } from "./spec.ts";
+import { type AgentSpec, instructionsPrompt, Lifetime, loadSpecs, parseSpec, type SpecContext, SpecLoadKind } from "./spec.ts";
 
 const context: SpecContext = { runner: nodeRunner(), terminal: fakeTerminal(), defaultCwd: "/work" };
 
@@ -22,29 +21,19 @@ describe("parseSpec", () => {
       assert.equal(spec.file, "/agents/agent.md");
       assert.equal(spec.enabled, true);
       assert.equal(spec.cwd, "/work");
-      assert.deepEqual(spec.lifetime, { kind: LifetimeKind.Bounded, timeoutMilliseconds: 30 * minuteMilliseconds });
+      assert.equal(spec.lifetime, Lifetime.Replaced);
       assert.deepEqual(spec.runnerOptions, { script: "" });
       assert.deepEqual(spec.terminalOptions, { session: "main" });
     });
   });
 
   describe("lifetime", () => {
-    it("should read a timeout for a bounded agent", () => {
-      const spec = parse('schedule: "0 9 * * *"\ntimeout: 45m');
-
-      assert.deepEqual(spec.lifetime, { kind: LifetimeKind.Bounded, timeoutMilliseconds: 45 * minuteMilliseconds });
-    });
-
     it("should make a reused agent resident", () => {
-      assert.deepEqual(parse('schedule: "0 9 * * *"\nreuse: true').lifetime, { kind: LifetimeKind.Resident });
+      assert.equal(parse('schedule: "0 9 * * *"\nreuse: true').lifetime, Lifetime.Resident);
     });
 
-    it("should reject a timeout on a reused agent", () => {
-      assert.throws(() => parse('schedule: "0 9 * * *"\nreuse: true\ntimeout: 1h'), /timeout does not apply/);
-    });
-
-    it("should reject a malformed timeout", () => {
-      assert.throws(() => parse('schedule: "0 9 * * *"\ntimeout: soon'), /timeout: invalid duration "soon"/);
+    it("should reject the retired timeout key", () => {
+      assert.throws(() => parse('schedule: "0 9 * * *"\ntimeout: 45m'), /unknown frontmatter keys: timeout/);
     });
   });
 

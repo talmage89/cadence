@@ -2,15 +2,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { type Schedule, scheduleSchema } from "./cron.ts";
-import { durationSchema, minuteMilliseconds } from "./duration.ts";
 import { splitFrontmatter } from "./frontmatter.ts";
 import { expandHome } from "./paths.ts";
 import type { Runner, Terminal } from "./ports.ts";
 import { describeError, parseOrThrow } from "./validation.ts";
 
-export const LifetimeKind = { Resident: "resident", Bounded: "bounded" } as const;
-
-export type Lifetime = { kind: typeof LifetimeKind.Resident } | { kind: typeof LifetimeKind.Bounded; timeoutMilliseconds: number };
+export const Lifetime = { Resident: "resident", Replaced: "replaced" } as const;
+export type Lifetime = (typeof Lifetime)[keyof typeof Lifetime];
 
 export interface AgentSpec {
   name: string;
@@ -75,7 +73,7 @@ export function parseSpec({ name, file, text }: SpecSource, context: SpecContext
     schedule: core.schedule,
     enabled: core.enabled,
     cwd: resolve(dirname(file), expandHome(core.cwd ?? context.defaultCwd)),
-    lifetime: toLifetime(core),
+    lifetime: core.reuse ? Lifetime.Resident : Lifetime.Replaced,
     runnerOptions: parseOrThrow(context.runner.options, fields),
     terminalOptions: parseOrThrow(context.terminal.options, fields),
   };
@@ -85,31 +83,14 @@ export function instructionsPrompt(spec: AgentSpec): string {
   return `Your instructions are in ${spec.file}. Its frontmatter only configures your schedule; carry out the instructions in the body.`;
 }
 
-const defaultTimeoutMilliseconds = 30 * minuteMilliseconds;
-
 const coreFieldsSchema = z.object({
   schedule: scheduleSchema,
   enabled: z.boolean().default(true),
   cwd: z.string().optional(),
-  timeout: durationSchema.optional(),
   reuse: z.boolean().default(false),
 });
-
-type CoreFields = z.output<typeof coreFieldsSchema>;
 
 function findUnknownKeys(fields: Record<string, unknown>, schemas: z.ZodObject[]): string[] {
   const knownKeys = new Set(schemas.flatMap((schema) => Object.keys(schema.shape)));
   return Object.keys(fields).filter((key) => !knownKeys.has(key));
-}
-
-function toLifetime({ reuse, timeout }: CoreFields): Lifetime {
-  if (reuse && timeout !== undefined) {
-    throw new Error("timeout does not apply to an agent with reuse: true");
-  }
-
-  if (reuse) {
-    return { kind: LifetimeKind.Resident };
-  }
-
-  return { kind: LifetimeKind.Bounded, timeoutMilliseconds: timeout ?? defaultTimeoutMilliseconds };
 }

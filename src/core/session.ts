@@ -43,6 +43,16 @@ export function readPreviousSession(directory: string, name: string): SessionRec
   return readRecord(previousRecordFile(directory, name));
 }
 
+export function stopSession(record: SessionRecord): void {
+  try {
+    process.kill(record.pid, "SIGTERM");
+  } catch (error) {
+    if (!hasErrorCode(error, "ESRCH")) {
+      throw error;
+    }
+  }
+}
+
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

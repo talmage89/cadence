@@ -51,7 +51,7 @@ cadence run <agent>    supervise one agent inside the terminal session opened fo
 ```
 
 You never need `run` yourself: `dispatch` opens a terminal session running it.
-It holds the agent's lock, starts the agent CLI, enforces the timeout, and logs
+It holds the agent's lock, starts the agent CLI, and logs
 the start and exit.
 
 ## Agent specs
@@ -64,7 +64,6 @@ where its file is and reads the body as its instructions.
 schedule: "30 6 * * 1-5"
 zellij: agents
 permission-mode: auto
-timeout: 45m
 ---
 
 # Morning digest
@@ -79,8 +78,7 @@ Core keys:
 | `schedule` | required | five-field cron expression, in local time |
 | `enabled` | default `true` | `false` stops launches without deleting the agent |
 | `cwd` | default `CADENCE_DEFAULT_CWD`, else the state directory | working directory; `~` expands, relative paths resolve from the spec's directory |
-| `reuse` | default `false` | `true` keeps one resident session; later runs are delivered to it as prompts |
-| `timeout` | default `30m` | how long a non-resident session may run (`s`, `m`, `h`, `d`); not allowed with `reuse` |
+| `reuse` | default `false` | `true` keeps one resident session that every later run is delivered to as a prompt; `false` starts a fresh session each run |
 
 Keys owned by the zellij terminal:
 
@@ -100,8 +98,10 @@ Either way its pane is stacked with the panes already there, and the tab keeps
 your layout whether or not you are attached; cadence never creates or closes
 tabs.
 
-A finished run's pane stays open, showing how it ended, until the agent's next
-run opens; cadence then closes it. A resident agent keeps one pane throughout.
+Sessions stay open between runs. Without `reuse`, each run replaces the last:
+cadence stops the previous session, opens the new one, then closes the old pane,
+so the agent always has exactly one open session. With `reuse`, the same
+session receives every run, so its conversation carries over.
 
 Keys owned by the Claude Code runner:
 
@@ -127,9 +127,9 @@ Any other key is an error, reported once in the dispatch log.
 - If the terminal has no live session to work with, a due agent waits and
   launches once the terminal is back. A launch that fails is retried every
   minute.
-- If the agent's previous session is still running, a resident agent receives
-  the prompt in that session; any other agent is skipped until its next
-  scheduled time.
+- If the agent's previous session is still open, a resident agent receives the
+  prompt in that session and any other agent's session is replaced by a fresh
+  one. A new session waits up to 30 seconds for the old one to let go.
 - Gates run first. While any gate is not ready, nothing launches; the macOS
   gate waits until the machine has been fully awake for a few minutes, so a
   dark wake never starts agents without a network.

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync } from "node:fs";
 import { describe, it } from "node:test";
 import { z } from "zod";
@@ -86,9 +88,9 @@ describe("dispatch", () => {
       assert.equal(agentState(runtime, "agent")?.lastChecked, minuteStamp(9, 1));
     });
 
-    it("should log busy and move on when a bounded agent is still running", () => {
+    it("should log busy and move on when a resident agent's session cannot be reached", () => {
       const { terminal, runtime } = setup();
-      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "* * * * *"');
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "* * * * *"\nreuse: true');
       acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T08:00:00.000Z", handle: { pane: "1" } });
       dispatch(runtime, nineOClock);
 
@@ -98,6 +100,23 @@ describe("dispatch", () => {
       assert.equal(agentState(runtime, "agent")?.lastStarted, undefined);
       assert.equal(agentState(runtime, "agent")?.lastChecked, minuteStamp(9, 1));
       assert.deepEqual(readLogMessages(dispatchLog(runtime)), ["busy agent"]);
+    });
+
+    it("should log a replaced run as a start", async () => {
+      const { terminal, runtime } = setup();
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "* * * * *"');
+      const previousSession = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+      const previousExit = once(previousSession, "exit");
+      assert.ok(previousSession.pid);
+      acquireSession(sessionsDirectory(runtime), "agent", { pid: previousSession.pid, startedAt: "2026-10-16T08:00:00.000Z", handle: { pane: "1" } });
+      dispatch(runtime, nineOClock);
+
+      dispatch(runtime, minutesAfterNine(1));
+
+      await previousExit;
+      assert.equal(terminal.opened.length, 1);
+      assert.equal(agentState(runtime, "agent")?.lastStarted, minutesAfterNine(1).toISOString());
+      assert.deepEqual(readLogMessages(dispatchLog(runtime)), ["replaced agent"]);
     });
   });
 

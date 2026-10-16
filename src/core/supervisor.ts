@@ -1,14 +1,17 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { secondMilliseconds } from "./duration.ts";
 import { appendLog } from "./log.ts";
 import { agentLog, type Runtime, sessionsDirectory } from "./runtime.ts";
-import { acquireSession, releaseSession } from "./session.ts";
-import { type AgentSpec, instructionsPrompt, type Lifetime, LifetimeKind } from "./spec.ts";
+import { acquireSession, releaseSession, type SessionRecord } from "./session.ts";
+import { type AgentSpec, instructionsPrompt } from "./spec.ts";
 import { describeError } from "./validation.ts";
 
-export const killGraceMilliseconds = 10 * secondMilliseconds;
+export interface SuperviseParams {
+  lockWaitMilliseconds?: number;
+}
 
-export async function supervise(spec: AgentSpec, runtime: Runtime): Promise<number> {
+export async function supervise(spec: AgentSpec, runtime: Runtime, { lockWaitMilliseconds = defaultLockWaitMilliseconds }: SuperviseParams = {}): Promise<number> {
   const log = agentLog(runtime, spec.name);
   const directory = sessionsDirectory(runtime);
   const record = {
@@ -17,8 +20,8 @@ export async function supervise(spec: AgentSpec, runtime: Runtime): Promise<numb
     handle: runtime.terminal.currentHandle(process.env),
   };
 
-  if (!acquireSession(directory, spec.name, record)) {
-    appendLog(log, "not started: another session of this agent is running");
+  if (!(await waitForSession(directory, spec.name, record, lockWaitMilliseconds))) {
+    appendLog(log, "not started: another session of this agent is still running");
     return 1;
   }
 
@@ -32,21 +35,35 @@ export async function supervise(spec: AgentSpec, runtime: Runtime): Promise<numb
   }
 }
 
+const defaultLockWaitMilliseconds = 30 * secondMilliseconds;
+const lockPollMilliseconds = 250;
+
+async function waitForSession(directory: string, name: string, record: SessionRecord, lockWaitMilliseconds: number): Promise<boolean> {
+  const deadline = Date.now() + lockWaitMilliseconds;
+  while (!acquireSession(directory, name, record)) {
+    if (Date.now() >= deadline) {
+      return false;
+    }
+
+    await delay(lockPollMilliseconds);
+  }
+
+  return true;
+}
+
 async function runAgent(spec: AgentSpec, runtime: Runtime, log: string): Promise<number> {
   const [executable, ...commandArguments] = runtime.runner.command(instructionsPrompt(spec), spec.runnerOptions);
   if (!executable) {
     throw new Error("the runner produced an empty command");
   }
 
-  appendLog(log, `started (${spec.lifetime.kind})`);
+  appendLog(log, `started (${spec.lifetime})`);
   const child = spawn(executable, commandArguments, { cwd: spec.cwd, stdio: "inherit" });
   const releaseSignals = relaySignals(child);
-  const cancelTimeout = enforceLifetime(child, spec.lifetime, log);
 
   try {
     return await waitForExit(child, log);
   } finally {
-    cancelTimeout();
     releaseSignals();
   }
 }
@@ -67,25 +84,6 @@ function relaySignals(child: ChildProcess): () => void {
       process.off(signal, forwardSignal);
     }
     process.off("SIGINT", ignoreInterrupt);
-  };
-}
-
-function enforceLifetime(child: ChildProcess, lifetime: Lifetime, log: string): () => void {
-  if (lifetime.kind === LifetimeKind.Resident) {
-    return () => {};
-  }
-
-  const { timeoutMilliseconds } = lifetime;
-  let killTimer: NodeJS.Timeout | undefined;
-  const timeoutTimer = setTimeout(() => {
-    appendLog(log, `timed out after ${timeoutMilliseconds}ms`);
-    child.kill("SIGTERM");
-    killTimer = setTimeout(() => child.kill("SIGKILL"), killGraceMilliseconds);
-  }, timeoutMilliseconds);
-
-  return () => {
-    clearTimeout(timeoutTimer);
-    clearTimeout(killTimer);
   };
 }
 

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { describe, it } from "node:test";
 import { type FakeTerminal, fakeRuntime, fakeTerminal } from "#testing/fakes.ts";
 import { LaunchOutcome, launch } from "./launcher.ts";
@@ -19,8 +21,8 @@ function setup(frontmatter: string): Setup {
   return { terminal, runtime, spec };
 }
 
-function holdSession(runtime: Runtime, handle: unknown): void {
-  acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T09:00:00.000Z", handle });
+function holdSession(runtime: Runtime, handle: unknown, pid = process.pid): void {
+  acquireSession(sessionsDirectory(runtime), "agent", { pid, startedAt: "2026-10-16T09:00:00.000Z", handle });
 }
 
 describe("launch", () => {
@@ -66,16 +68,21 @@ describe("launch", () => {
   });
 
   describe("with a live session", () => {
-    it("should report busy for a bounded agent", () => {
+    it("should replace a non-resident agent's session: stop it, open a new one, then close the old", async () => {
       const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
-      holdSession(runtime, { pane: "7" });
+      const previousSession = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+      const previousExit = once(previousSession, "exit");
+      assert.ok(previousSession.pid);
+      holdSession(runtime, { pane: "7" }, previousSession.pid);
       terminal.livePanes.add("7");
 
       const outcome = launch(spec, runtime);
 
-      assert.equal(outcome, LaunchOutcome.Busy);
-      assert.equal(terminal.opened.length, 0);
-      assert.equal(terminal.delivered.length, 0);
+      const [, exitSignal] = await previousExit;
+      assert.equal(outcome, LaunchOutcome.Replaced);
+      assert.equal(exitSignal, "SIGTERM");
+      assert.equal(terminal.opened.length, 1);
+      assert.deepEqual(terminal.closed, ["7"]);
     });
 
     it("should prompt a resident agent's session", () => {

@@ -1,37 +1,29 @@
 import { type Runtime, sessionsDirectory } from "./runtime.ts";
-import { readLiveSession, readPreviousSession } from "./session.ts";
-import { type AgentSpec, instructionsPrompt, LifetimeKind } from "./spec.ts";
+import { readLiveSession, readPreviousSession, type SessionRecord, stopSession } from "./session.ts";
+import { type AgentSpec, instructionsPrompt, Lifetime } from "./spec.ts";
 
-export const LaunchOutcome = { Started: "started", Prompted: "prompted", Busy: "busy" } as const;
+export const LaunchOutcome = { Started: "started", Replaced: "replaced", Prompted: "prompted", Busy: "busy" } as const;
 export type LaunchOutcome = (typeof LaunchOutcome)[keyof typeof LaunchOutcome];
 
 export function launch(spec: AgentSpec, runtime: Runtime): LaunchOutcome {
   const directory = sessionsDirectory(runtime);
   const liveSession = readLiveSession(directory, spec.name);
-  if (liveSession) {
+
+  if (liveSession && spec.lifetime === Lifetime.Resident) {
     return promptLiveSession(spec, runtime, liveSession.handle);
   }
 
-  const previousSession = readPreviousSession(directory, spec.name);
-  runtime.terminal.open({
-    title: spec.name,
-    cwd: spec.cwd,
-    command: [...runtime.supervisorCommand, "run", spec.name],
-    options: spec.terminalOptions,
-  });
-
-  if (previousSession) {
-    closeFinishedSession(runtime, previousSession.handle);
+  if (liveSession) {
+    stopSession(liveSession);
+    openSession(spec, runtime, liveSession);
+    return LaunchOutcome.Replaced;
   }
 
+  openSession(spec, runtime, readPreviousSession(directory, spec.name));
   return LaunchOutcome.Started;
 }
 
 function promptLiveSession(spec: AgentSpec, runtime: Runtime, storedHandle: unknown): LaunchOutcome {
-  if (spec.lifetime.kind !== LifetimeKind.Resident) {
-    return LaunchOutcome.Busy;
-  }
-
   const { terminal } = runtime;
   const handle = terminal.handle.safeParse(storedHandle);
   if (!handle.success || !terminal.isLive(handle.data)) {
@@ -42,8 +34,15 @@ function promptLiveSession(spec: AgentSpec, runtime: Runtime, storedHandle: unkn
   return LaunchOutcome.Prompted;
 }
 
-function closeFinishedSession(runtime: Runtime, storedHandle: unknown): void {
-  const handle = runtime.terminal.handle.safeParse(storedHandle);
+function openSession(spec: AgentSpec, runtime: Runtime, sessionToClose: SessionRecord | null): void {
+  runtime.terminal.open({
+    title: spec.name,
+    cwd: spec.cwd,
+    command: [...runtime.supervisorCommand, "run", spec.name],
+    options: spec.terminalOptions,
+  });
+
+  const handle = runtime.terminal.handle.safeParse(sessionToClose?.handle);
   if (handle.success) {
     runtime.terminal.close(handle.data);
   }
