@@ -48,11 +48,12 @@ export function resolveRuntime(definition: ConfigDefinition, variables: NodeJS.P
     stateDirectory: resolvePath(config.stateDirectory),
     logDirectory: resolvePath(config.logDirectory),
     defaultCwd: resolvePath(config.defaultCwd),
-    supervisorCommand: [process.execPath, join(repositoryRoot, "src", "cli.ts")],
+    supervisorCommand: [process.execPath, typeStrippingFlag, join(repositoryRoot, "src", "cli.ts")],
   };
 }
 
 const configFileName = "cadence.config.ts";
+const typeStrippingFlag = "--experimental-strip-types";
 
 const configModuleSchema = z.object({
   default: z.object({

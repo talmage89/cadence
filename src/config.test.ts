@@ -40,7 +40,7 @@ describe("resolveRuntime", () => {
   it("should point terminals at this checkout's CLI", () => {
     const runtime = resolveRuntime(definition, { AGENTS: "/agents" });
 
-    assert.deepEqual(runtime.supervisorCommand, [process.execPath, join(repositoryRoot, "src", "cli.ts")]);
+    assert.deepEqual(runtime.supervisorCommand, [process.execPath, "--experimental-strip-types", join(repositoryRoot, "src", "cli.ts")]);
   });
 
   it("should name the missing settings when the environment is incomplete", () => {

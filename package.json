@@ -8,8 +8,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "dispatch": "node src/cli.ts dispatch",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "dispatch": "node --experimental-strip-types src/cli.ts dispatch",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "typecheck": "tsc"
   },
   "dependencies": {

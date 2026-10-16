@@ -24,8 +24,11 @@ cp .env.example .env    # then fill in your paths
 npm test
 ```
 
-Run `node src/cli.ts dispatch` once a minute. On macOS, fill in
-`launchd/cadence.plist.template` and load it:
+Run `npm run dispatch` (or `node --experimental-strip-types src/cli.ts dispatch`)
+once a minute. cadence passes `--experimental-strip-types` everywhere it starts
+Node, so a `NODE_OPTIONS` that turns type stripping off cannot break it.
+
+On macOS, fill in `launchd/cadence.plist.template` and load it:
 
 ```sh
 sed -e "s|{{LABEL}}|local.cadence|" \

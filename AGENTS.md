@@ -14,6 +14,8 @@ person's machine, projects, or directory layout.
   committed files.
 - TypeScript, run directly by Node with no build step, so only erasable syntax:
   no enums, namespaces, or parameter properties. Import with `.ts` extensions.
+  Every place that starts Node passes `--experimental-strip-types`, because a
+  user's `NODE_OPTIONS` may turn type stripping off.
 - Before committing, run `npm run typecheck` and `npm test`. Tests live beside
   the code they cover; shared fakes are in `src/testing/fakes.ts`.
 - A user-facing change updates the README: CLI usage, frontmatter keys, and
