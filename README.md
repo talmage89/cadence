@@ -12,9 +12,9 @@ run is delivered to the same session as a new prompt.
 
 - Node 24 or later
 - The terminal and agent CLI your configuration names. The shipped
-  configuration uses [zellij](https://zellij.dev) and
-  [Claude Code](https://claude.com/claude-code), and gates launches on a macOS
-  machine being fully awake.
+  configuration runs [Claude Code](https://claude.com/claude-code) in
+  [zellij](https://zellij.dev) or [tmux](https://github.com/tmux/tmux), and
+  gates launches on a macOS machine being fully awake.
 
 ## Setup
 
@@ -41,7 +41,7 @@ launchctl load ~/Library/LaunchAgents/local.cadence.plist
 ```
 
 The `PATH` you bake in is the dispatcher's own, so it must reach your terminal
-(`zellij`). Agents get their environment from your login shell instead.
+(`zellij` or `tmux`). Agents get their environment from your login shell instead.
 
 ## Commands
 
@@ -80,6 +80,9 @@ Core keys:
 | `cwd` | default `CADENCE_DEFAULT_CWD`, else the state directory | working directory; `~` expands, relative paths resolve from the spec's directory |
 | `reuse` | default `false` | `true` keeps one resident session that every later run is delivered to as a prompt; `false` starts a fresh session each run |
 
+`CADENCE_TERMINAL` in `.env` picks the terminal agents run in: `zellij` (the
+default) or `tmux`. Each terminal owns its own keys.
+
 Keys owned by the zellij terminal:
 
 | Key | | |
@@ -97,6 +100,25 @@ for a `digest.md` agent. Without one, the agent uses the session's first tab.
 Either way its pane is stacked with the panes already there, and the tab keeps
 your layout whether or not you are attached; cadence never creates or closes
 tabs.
+
+Keys owned by the tmux terminal:
+
+| Key | | |
+|---|---|---|
+| `tmux` | optional | session to open the agent's window in; it must already be running. Without it, the agent gets a session of its own, named after it |
+
+Start tmux yourself and leave its server running; cadence never starts one,
+and a due agent waits while no server is up. cadence uses tmux's default
+server; for a named one (`tmux -L work`), pass `tmux({ socketName: "work" })`
+in `cadence.config.ts`.
+
+Each agent runs in a window named after it, opened in the background so no one
+attached is switched to it. A later run splits that window and the old pane is
+then closed, so the window keeps its place. An agent without a `tmux` key gets
+its own session the first time it runs (`tmux attach -t digest`); cadence marks
+that session as the agent's and refuses to use a session of the same name that
+it did not create. A finished pane stays, showing how the run ended. Agents run
+through your login shell, as with zellij.
 
 Sessions stay open between runs. Without `reuse`, each run replaces the last:
 cadence stops the previous session, opens the new one, then closes the old pane,
@@ -165,8 +187,9 @@ export default defineConfig({
 });
 ```
 
-Values come from the process environment, falling back to `.env` in the
-repository root.
+The shipped configuration builds its terminal from `CADENCE_TERMINAL`. Values
+come from the process environment, falling back to `.env` in the repository
+root.
 A missing required setting stops cadence with the setting named.
 
 To support another terminal, agent CLI, or readiness check, implement the
