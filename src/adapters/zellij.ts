@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import type { Terminal } from "#core/ports.ts";
 import { jsonSchema, parseOrThrow } from "#core/validation.ts";
+import { isLaunchOf, launchCommand, readLaunchId } from "./launch-command.ts";
 
 export type ZellijExecutor = (zellijArguments: string[]) => string;
 
@@ -10,7 +11,7 @@ export interface ZellijParams {
 }
 
 const optionsSchema = z.object({ zellij: z.string().min(1) });
-const handleSchema = z.object({ session: z.string(), paneId: z.string() });
+const handleSchema = z.object({ session: z.string(), paneId: z.string(), launchId: z.string() });
 
 type ZellijHandle = z.output<typeof handleSchema>;
 
@@ -27,25 +28,25 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
       requireLiveSession(execute, sessionName);
 
       const tabId = findAgentTabId(execute, sessionName, title);
-      const paneId = parseOrThrow(
-        paneIdSchema,
-        execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--", ...throughLoginShell(command)]),
-      );
+      const { argv } = launchCommand(command);
+      const paneId = parseOrThrow(paneIdSchema, execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--", ...argv]));
 
       stackTab(execute, sessionName, tabId, paneId);
     },
 
     currentHandle(environment) {
-      const result = paneEnvironmentSchema.safeParse(environment);
-      return result.success ? result.data : null;
-    },
-
-    isLive({ session, paneId }: ZellijHandle) {
-      if (!isSessionLive(execute, session)) {
-        return false;
+      const pane = paneEnvironmentSchema.safeParse(environment);
+      const launchId = readLaunchId(environment);
+      if (!pane.success || launchId === null) {
+        return null;
       }
 
-      return listTerminalPanes(execute, session).some((pane) => !pane.exited && toPaneId(pane.id) === paneId);
+      return { ...pane.data, launchId };
+    },
+
+    isLive(handle: ZellijHandle) {
+      const pane = findLaunchedPane(execute, handle);
+      return pane !== null && !pane.exited;
     },
 
     deliver({ session, paneId }: ZellijHandle, text) {
@@ -53,14 +54,9 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
       execute(["--session", session, "action", "send-keys", "--pane-id", paneId, "Enter"]);
     },
 
-    close({ session, paneId }: ZellijHandle) {
-      if (!isSessionLive(execute, session)) {
-        return;
-      }
-
-      const isPaneListed = listTerminalPanes(execute, session).some((pane) => toPaneId(pane.id) === paneId);
-      if (isPaneListed) {
-        execute(["--session", session, "action", "close-pane", "--pane-id", paneId]);
+    close(handle: ZellijHandle) {
+      if (findLaunchedPane(execute, handle) !== null) {
+        execute(["--session", handle.session, "action", "close-pane", "--pane-id", handle.paneId]);
       }
     },
   };
@@ -68,7 +64,6 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
 
 const exitedMarker = "EXITED";
 const terminalPanePrefix = "terminal_";
-const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
 
 const sessionLineSchema = z
   .string()
@@ -82,7 +77,11 @@ const sessionsSchema = z
 
 const tabsSchema = jsonSchema(z.array(z.looseObject({ tab_id: z.number(), position: z.number(), name: z.string() })));
 
-const panesSchema = jsonSchema(z.array(z.looseObject({ id: z.number(), tab_id: z.number(), is_plugin: z.boolean(), exited: z.boolean() })));
+const panesSchema = jsonSchema(
+  z.array(z.looseObject({ id: z.number(), tab_id: z.number(), is_plugin: z.boolean(), exited: z.boolean(), terminal_command: z.string().nullable() })),
+);
+
+type ZellijPane = z.output<typeof panesSchema>[number];
 
 const paneIdSchema = z.string().regex(/^terminal_\d+$/, { error: (issue) => `zellij returned an unexpected pane id: ${String(issue.input)}` });
 
@@ -126,10 +125,6 @@ function findAgentTabId(execute: ZellijExecutor, sessionName: string, agentName:
   return String(agentTab.tab_id);
 }
 
-function throughLoginShell(command: string[]): string[] {
-  return ["/bin/sh", "-c", loginShellScript, "cadence", ...command];
-}
-
 function stackTab(execute: ZellijExecutor, sessionName: string, tabId: string, newPaneId: string): void {
   const tabPaneIds = listTerminalPanes(execute, sessionName)
     .filter((pane) => String(pane.tab_id) === tabId)
@@ -140,6 +135,15 @@ function stackTab(execute: ZellijExecutor, sessionName: string, tabId: string, n
   }
 
   execute(["--session", sessionName, "action", "stack-panes", "--", ...tabPaneIds, newPaneId]);
+}
+
+function findLaunchedPane(execute: ZellijExecutor, { session, paneId, launchId }: ZellijHandle): ZellijPane | null {
+  if (!isSessionLive(execute, session)) {
+    return null;
+  }
+
+  const panes = listTerminalPanes(execute, session);
+  return panes.find((pane) => toPaneId(pane.id) === paneId && isLaunchOf(pane.terminal_command, launchId)) ?? null;
 }
 
 function listTerminalPanes(execute: ZellijExecutor, sessionName: string): z.output<typeof panesSchema> {

@@ -17,10 +17,14 @@ export interface Terminal<OptionsSchema extends z.ZodObject = z.ZodObject, Handl
   open(request: OpenRequest<z.output<OptionsSchema>>): void;
   /** Called from inside a session this terminal opened: how to reach that session later, if it can be reached. */
   currentHandle(environment: NodeJS.ProcessEnv): z.output<HandleSchema> | null;
+  /** False once the session's pane has exited or gone, including when a restarted terminal has given its id to another pane. */
   isLive(handle: z.output<HandleSchema>): boolean;
-  /** Types `text` into the session as a submitted prompt. */
+  /** Types `text` into the session as a submitted prompt. Called only on a handle that `isLive` just accepted. */
   deliver(handle: z.output<HandleSchema>, text: string): void;
-  /** Removes what a finished session left behind, such as its pane. Called after the next session has opened. */
+  /**
+   * Removes what a finished session left behind, such as its pane. Called after the next session has opened.
+   * Leaves alone a pane whose id has since passed to another session or to the user.
+   */
   close(handle: z.output<HandleSchema>): void;
 }
 

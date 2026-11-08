@@ -101,7 +101,9 @@ tabs.
 Sessions stay open between runs. Without `reuse`, each run replaces the last:
 cadence stops the previous session, opens the new one, then closes the old pane,
 so the agent always has exactly one open session. With `reuse`, the same
-session receives every run, so its conversation carries over.
+session receives every run, so its conversation carries over. Each run carries
+a launch id that cadence checks before closing or prompting a pane, so a pane
+that took over an old pane's number after the terminal restarted is left alone.
 
 Keys owned by the Claude Code runner:
 
