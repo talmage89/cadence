@@ -318,6 +318,12 @@ describe("tmux against a real server", { skip: !isTmuxInstalled && "tmux is not 
     return runTmux(["-f", "/dev/null", "new-session", "-d", "-s", "agents", "-P", "-F", "#{socket_path}"]).trim();
   }
 
+  function isServerGone(): boolean {
+    // kill-server returns before the server exits; a server still exiting fails clients differently.
+    const { stderr } = spawnSync("tmux", ["-L", socketName, "list-sessions"], { encoding: "utf8", env: serverEnvironment });
+    return stderr.includes("no server running");
+  }
+
   function listPaneIds(target: string): string[] {
     return runTmux(["list-panes", "-t", target, "-F", "#{pane_id}"]).trim().split("\n");
   }
@@ -398,6 +404,7 @@ describe("tmux against a real server", { skip: !isTmuxInstalled && "tmux is not 
   it("should leave alone the panes that reuse a launch's pane id after the server restarts", async () => {
     const stale = await openAgent("digest", "digest-3", { tmux: "agents" });
     runTmux(["kill-server"]);
+    await waitFor(() => (isServerGone() ? true : null));
     startServer();
     while (!runTmux(["list-panes", "-a", "-F", "#{pane_id}"]).split("\n").includes(stale.handle.paneId)) {
       runTmux(["new-window", "-d", "-t", "=agents:"]);
