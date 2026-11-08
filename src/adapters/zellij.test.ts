@@ -63,7 +63,7 @@ interface ZellijPaneFixture {
   terminal_command: string | null;
 }
 
-const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { zellij: "agents" } };
+const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { zellij: "agents" }, replacing: null };
 const launchId = "0b7f3c52-5d2e-4f8a-9c41-2e6a8d9b1f07";
 const handle = { session: "agents", paneId: "terminal_5", launchId };
 const launchedCommand = `/usr/bin/env CADENCE_LAUNCH_ID=${launchId} /bin/sh -c exec ... cadence node cli.ts run digest`;
@@ -158,6 +158,15 @@ describe("zellij", () => {
       assert.equal(calls.length, 1);
     });
 
+    it("should return the new pane's handle, carrying the launch id its start command holds", () => {
+      const { calls, terminal } = fakeZellij({ sessions: liveAgentsSession });
+
+      const openedHandle = terminal.open(openRequest);
+
+      assert.deepEqual(openedHandle, { session: "agents", paneId: "terminal_7", launchId: openedHandle.launchId });
+      assert.equal(findRunCall(calls).includes(`CADENCE_LAUNCH_ID=${openedHandle.launchId}`), true);
+    });
+
     it("should report a session with no tabs", () => {
       const { terminal } = fakeZellij({ sessions: liveAgentsSession, tabs: "[]" });
 
@@ -169,22 +178,6 @@ describe("zellij", () => {
 
       assert.throws(() => terminal.open(openRequest), /unexpected pane id: oops/);
       assert.equal(calls.some((call) => call.includes("stack-panes")), false);
-    });
-  });
-
-  describe("currentHandle", () => {
-    it("should read the session, pane, and launch id from the environment", () => {
-      const { terminal } = fakeZellij();
-
-      assert.deepEqual(terminal.currentHandle({ ZELLIJ_SESSION_NAME: "agents", ZELLIJ_PANE_ID: "5", CADENCE_LAUNCH_ID: launchId }), handle);
-    });
-
-    it("should be null outside zellij, with a malformed pane id, or outside a launch", () => {
-      const { terminal } = fakeZellij();
-
-      assert.equal(terminal.currentHandle({ CADENCE_LAUNCH_ID: launchId }), null);
-      assert.equal(terminal.currentHandle({ ZELLIJ_SESSION_NAME: "agents", ZELLIJ_PANE_ID: "five", CADENCE_LAUNCH_ID: launchId }), null);
-      assert.equal(terminal.currentHandle({ ZELLIJ_SESSION_NAME: "agents", ZELLIJ_PANE_ID: "5" }), null);
     });
   });
 

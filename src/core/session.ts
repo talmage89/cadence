@@ -6,7 +6,6 @@ import { jsonSchema } from "./validation.ts";
 const sessionRecordSchema = z.object({
   pid: z.number().int().positive(),
   startedAt: z.string(),
-  handle: z.unknown(),
 });
 
 export type SessionRecord = z.output<typeof sessionRecordSchema>;
@@ -35,12 +34,30 @@ export function readLiveSession(directory: string, name: string): SessionRecord 
 export function releaseSession(directory: string, name: string, pid: number): void {
   const file = recordFile(directory, name);
   if (readRecord(file)?.pid === pid) {
-    renameSync(file, previousRecordFile(directory, name));
+    removeFile(file);
   }
 }
 
-export function readPreviousSession(directory: string, name: string): SessionRecord | null {
-  return readRecord(previousRecordFile(directory, name));
+/** The handle of the session most recently opened for the agent, whether or not it is still running. */
+export function readOpenedHandle(directory: string, name: string): unknown {
+  let text: string;
+  try {
+    text = readFileSync(handleFile(directory, name), "utf8");
+  } catch {
+    return null;
+  }
+
+  const result = handleFileSchema.safeParse(text);
+  return result.success ? result.data : null;
+}
+
+export function recordOpenedHandle(directory: string, name: string, handle: unknown): void {
+  mkdirSync(directory, { recursive: true });
+
+  const file = handleFile(directory, name);
+  const temporaryFile = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporaryFile, `${JSON.stringify(handle)}\n`);
+  renameSync(temporaryFile, file);
 }
 
 export function stopSession(record: SessionRecord): void {
@@ -63,13 +80,14 @@ export function isProcessAlive(pid: number): boolean {
 }
 
 const recordFileSchema = jsonSchema(sessionRecordSchema);
+const handleFileSchema = jsonSchema(z.unknown());
 
 function recordFile(directory: string, name: string): string {
   return join(directory, `${name}.json`);
 }
 
-function previousRecordFile(directory: string, name: string): string {
-  return join(directory, `${name}.previous.json`);
+function handleFile(directory: string, name: string): string {
+  return join(directory, `${name}.handle.json`);
 }
 
 function tryCreateRecord(file: string, record: SessionRecord): boolean {

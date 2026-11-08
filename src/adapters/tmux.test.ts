@@ -4,6 +4,8 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
+import { jsonSchema } from "#core/validation.ts";
 import { temporaryDirectory } from "#testing/fakes.ts";
 import { tmux } from "./tmux.ts";
 
@@ -11,11 +13,11 @@ interface FakeTmuxParams {
   sessions?: string[];
   windows?: string[];
   panes?: string[];
-  createdPaneId?: string;
+  createdPane?: string;
   isServerDown?: boolean;
 }
 
-function fakeTmux({ sessions = [], windows = [], panes = [], createdPaneId = "%7", isServerDown = false }: FakeTmuxParams = {}) {
+function fakeTmux({ sessions = [], windows = [], panes = [], createdPane = "%7\t/private/tmp/tmux-501/default", isServerDown = false }: FakeTmuxParams = {}) {
   const calls: string[][] = [];
   const terminal = tmux({
     execute(tmuxArguments) {
@@ -39,7 +41,7 @@ function fakeTmux({ sessions = [], windows = [], panes = [], createdPaneId = "%7
       }
 
       if (paneCreatingCommands.has(command)) {
-        return createdPaneId;
+        return createdPane;
       }
 
       return "";
@@ -75,14 +77,13 @@ function paneRow(id: string, isDead: boolean, startCommand: string): string {
   return [id, isDead ? "1" : "0", startCommand].join("\t");
 }
 
-const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { tmux: "agents" } };
+const openRequest = { title: "digest", cwd: "/work", command: ["node", "cli.ts", "run", "digest"], options: { tmux: "agents" }, replacing: null };
 const ownSessionRequest = { ...openRequest, options: {} };
 const launchId = "0b7f3c52-5d2e-4f8a-9c41-2e6a8d9b1f07";
 const socket = "/private/tmp/tmux-501/default";
 const handle = { socket, paneId: "%5", launchId };
 const launchedCommand = `/usr/bin/env CADENCE_LAUNCH_ID=${launchId} /bin/sh -c "exec ..." cadence node cli.ts run digest`;
 const otherLaunchCommand = "/usr/bin/env CADENCE_LAUNCH_ID=6d1e2f30-8a4b-4c5d-9e6f-7a8b9c0d1e2f /bin/sh -c ... cadence node cli.ts run digest";
-const paneEnvironment = { TMUX: `${socket},4242,0`, TMUX_PANE: "%5", CADENCE_LAUNCH_ID: launchId };
 
 describe("tmux", () => {
   describe("options", () => {
@@ -132,7 +133,7 @@ describe("tmux", () => {
         terminal.open(openRequest);
         const newWindow = findCall(calls, "new-window");
 
-        assert.deepEqual(newWindow.slice(0, newWindow.indexOf("--")), ["new-window", "-d", "-t", "$1:", "-n", "digest", "-c", "/work", "-P", "-F", "#{pane_id}"]);
+        assert.deepEqual(newWindow.slice(0, newWindow.indexOf("--")), ["new-window", "-d", "-t", "$1:", "-n", "digest", "-c", "/work", "-P", "-F", "#{pane_id}\t#{socket_path}"]);
         assert.deepEqual(findCall(calls, "set-option"), ["set-option", "-w", "-t", "%7", "@cadence-window", "digest"]);
       });
 
@@ -181,7 +182,7 @@ describe("tmux", () => {
         terminal.open(ownSessionRequest);
         const newSession = findCall(calls, "new-session");
 
-        assert.deepEqual(newSession.slice(0, newSession.indexOf("--")), ["new-session", "-d", "-s", "digest", "-n", "digest", "-c", "/work", "-P", "-F", "#{pane_id}"]);
+        assert.deepEqual(newSession.slice(0, newSession.indexOf("--")), ["new-session", "-d", "-s", "digest", "-n", "digest", "-c", "/work", "-P", "-F", "#{pane_id}\t#{socket_path}"]);
         assert.deepEqual(
           calls.filter((call) => subcommandOf(call) === "set-option").map((call) => call.slice(-2)),
           [["@cadence-session", "digest"], ["@cadence-window", "digest"], ["remain-on-exit", "on"]],
@@ -207,27 +208,20 @@ describe("tmux", () => {
       });
     });
 
-    it("should not configure a pane when tmux returns an unexpected pane id", () => {
-      const { calls, terminal } = fakeTmux({ sessions: [sessionRow("$1", "agents")], createdPaneId: "oops" });
+    it("should return the new pane's handle: its server socket, its id, and the launch id its start command holds", () => {
+      const { calls, terminal } = fakeTmux({ sessions: [sessionRow("$1", "agents")] });
 
-      assert.throws(() => terminal.open(openRequest), /unexpected pane id: oops/);
+      const openedHandle = terminal.open(openRequest);
+
+      assert.deepEqual(openedHandle, { socket, paneId: "%7", launchId: openedHandle.launchId });
+      assert.equal(findCall(calls, "new-window").includes(`CADENCE_LAUNCH_ID=${openedHandle.launchId}`), true);
+    });
+
+    it("should not configure a pane when tmux returns an unexpected pane", () => {
+      const { calls, terminal } = fakeTmux({ sessions: [sessionRow("$1", "agents")], createdPane: "oops" });
+
+      assert.throws(() => terminal.open(openRequest), /unexpected pane: \["oops"\]/);
       assert.equal(calls.some((call) => subcommandOf(call) === "set-option"), false);
-    });
-  });
-
-  describe("currentHandle", () => {
-    it("should read the server socket, pane, and launch id from the environment", () => {
-      const { terminal } = fakeTmux();
-
-      assert.deepEqual(terminal.currentHandle(paneEnvironment), handle);
-    });
-
-    it("should be null outside tmux, with a malformed pane id, or outside a launch", () => {
-      const { terminal } = fakeTmux();
-
-      assert.equal(terminal.currentHandle({ CADENCE_LAUNCH_ID: launchId }), null);
-      assert.equal(terminal.currentHandle({ ...paneEnvironment, TMUX_PANE: "5" }), null);
-      assert.equal(terminal.currentHandle({ ...paneEnvironment, CADENCE_LAUNCH_ID: undefined }), null);
     });
   });
 
@@ -308,6 +302,7 @@ describe("tmux", () => {
 });
 
 const isTmuxInstalled = spawnSync("tmux", ["-V"]).status === 0;
+const environmentSchema = jsonSchema(z.object({ TMUX_PANE: z.string(), CADENCE_LAUNCH_ID: z.string() }));
 
 describe("tmux against a real server", { skip: !isTmuxInstalled && "tmux is not installed" }, () => {
   const socketName = `cadence-test-${process.pid}`;
@@ -336,10 +331,10 @@ describe("tmux against a real server", { skip: !isTmuxInstalled && "tmux is not 
       `process.stdin.on("data", (chunk) => fs.appendFileSync(${JSON.stringify(inputFile)}, chunk));`,
     ].join("\n");
 
-    terminal.open({ title: agentName, cwd: workDirectory, command: [process.execPath, "-e", script], options });
-    const environment = await waitFor(() => (existsSync(environmentFile) ? JSON.parse(readFileSync(environmentFile, "utf8")) : null));
-    const agentHandle = terminal.currentHandle(environment);
-    assert.ok(agentHandle, "the agent could not read its handle from its environment");
+    const agentHandle = terminal.open({ title: agentName, cwd: workDirectory, command: [process.execPath, "-e", script], options, replacing: null });
+    const environment = await waitFor(() => (existsSync(environmentFile) ? environmentSchema.parse(readFileSync(environmentFile, "utf8")) : null));
+    assert.equal(environment.TMUX_PANE, agentHandle.paneId);
+    assert.equal(environment.CADENCE_LAUNCH_ID, agentHandle.launchId);
 
     return { handle: agentHandle, inputFile };
   }

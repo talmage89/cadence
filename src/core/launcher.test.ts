@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import { type FakeTerminal, fakeRuntime, fakeTerminal } from "#testing/fakes.ts";
 import { LaunchOutcome, launch } from "./launcher.ts";
 import { type Runtime, sessionsDirectory } from "./runtime.ts";
-import { acquireSession, releaseSession } from "./session.ts";
+import { acquireSession, readOpenedHandle, recordOpenedHandle } from "./session.ts";
 import { type AgentSpec, parseSpec } from "./spec.ts";
 
 interface Setup {
@@ -21,8 +21,12 @@ function setup(frontmatter: string): Setup {
   return { terminal, runtime, spec };
 }
 
-function holdSession(runtime: Runtime, handle: unknown, pid = process.pid): void {
-  acquireSession(sessionsDirectory(runtime), "agent", { pid, startedAt: "2026-10-16T09:00:00.000Z", handle });
+function holdSession(runtime: Runtime, pid = process.pid): void {
+  acquireSession(sessionsDirectory(runtime), "agent", { pid, startedAt: "2026-10-16T09:00:00.000Z" });
+}
+
+function recordHandle(runtime: Runtime, handle: unknown): void {
+  recordOpenedHandle(sessionsDirectory(runtime), "agent", handle);
 }
 
 describe("launch", () => {
@@ -34,36 +38,47 @@ describe("launch", () => {
 
       assert.equal(outcome, LaunchOutcome.Started);
       assert.deepEqual(terminal.opened, [
-        { title: "agent", cwd: "/work", command: ["node", "/cadence/src/cli.ts", "run", "agent"], options: { session: "agents" } },
+        { title: "agent", cwd: "/work", command: ["node", "/cadence/src/cli.ts", "run", "agent"], options: { session: "agents" }, replacing: null },
       ]);
     });
 
-    it("should close the previous session after opening the new one", () => {
-      const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
-      holdSession(runtime, { pane: "3" });
-      releaseSession(sessionsDirectory(runtime), "agent", process.pid);
+    it("should record the new session's handle", () => {
+      const { runtime, spec } = setup('schedule: "* * * * *"');
 
       launch(spec, runtime);
 
-      assert.equal(terminal.opened.length, 1);
-      assert.deepEqual(terminal.closed, ["3"]);
+      assert.deepEqual(readOpenedHandle(sessionsDirectory(runtime), "agent"), { pane: "opened-1" });
     });
 
-    it("should close nothing when there is no usable previous session", () => {
+    it("should open the new session in place of the previous one, then close the previous one", () => {
       const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
-      holdSession(runtime, null);
-      releaseSession(sessionsDirectory(runtime), "agent", process.pid);
+      recordHandle(runtime, { pane: "3" });
 
       launch(spec, runtime);
 
+      assert.deepEqual(terminal.opened[0]?.replacing, { pane: "3" });
+      assert.deepEqual(terminal.closed, ["3"]);
+      assert.deepEqual(readOpenedHandle(sessionsDirectory(runtime), "agent"), { pane: "opened-1" });
+    });
+
+    it("should close nothing when there is no usable previous handle", () => {
+      const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
+      recordHandle(runtime, { window: 3 });
+
+      launch(spec, runtime);
+
+      assert.equal(terminal.opened[0]?.replacing, null);
       assert.deepEqual(terminal.closed, []);
     });
 
-    it("should let terminal errors propagate", () => {
+    it("should let terminal errors propagate, keeping the previous handle to close next time", () => {
       const { terminal, runtime, spec } = setup('schedule: "* * * * *"');
+      recordHandle(runtime, { pane: "3" });
       terminal.openError = new Error("no session");
 
       assert.throws(() => launch(spec, runtime), /no session/);
+      assert.deepEqual(terminal.closed, []);
+      assert.deepEqual(readOpenedHandle(sessionsDirectory(runtime), "agent"), { pane: "3" });
     });
   });
 
@@ -73,26 +88,28 @@ describe("launch", () => {
       const previousSession = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
       const previousExit = once(previousSession, "exit");
       assert.ok(previousSession.pid);
-      holdSession(runtime, { pane: "7" }, previousSession.pid);
-      terminal.livePanes.add("7");
+      holdSession(runtime, previousSession.pid);
+      recordHandle(runtime, { pane: "7" });
 
       const outcome = launch(spec, runtime);
 
       const [, exitSignal] = await previousExit;
       assert.equal(outcome, LaunchOutcome.Replaced);
       assert.equal(exitSignal, "SIGTERM");
-      assert.equal(terminal.opened.length, 1);
+      assert.deepEqual(terminal.opened[0]?.replacing, { pane: "7" });
       assert.deepEqual(terminal.closed, ["7"]);
     });
 
     it("should prompt a resident agent's session", () => {
       const { terminal, runtime, spec } = setup('schedule: "* * * * *"\nreuse: true');
-      holdSession(runtime, { pane: "7" });
+      holdSession(runtime);
+      recordHandle(runtime, { pane: "7" });
       terminal.livePanes.add("7");
 
       const outcome = launch(spec, runtime);
 
       assert.equal(outcome, LaunchOutcome.Prompted);
+      assert.equal(terminal.opened.length, 0);
       assert.equal(terminal.delivered.length, 1);
       assert.equal(terminal.delivered[0]?.pane, "7");
       assert.match(terminal.delivered[0]?.text ?? "", /Your instructions are in \/agents\/agent\.md/);
@@ -100,7 +117,8 @@ describe("launch", () => {
 
     it("should report busy when a resident agent's pane is gone", () => {
       const { terminal, runtime, spec } = setup('schedule: "* * * * *"\nreuse: true');
-      holdSession(runtime, { pane: "7" });
+      holdSession(runtime);
+      recordHandle(runtime, { pane: "7" });
 
       const outcome = launch(spec, runtime);
 
@@ -108,9 +126,9 @@ describe("launch", () => {
       assert.equal(terminal.delivered.length, 0);
     });
 
-    it("should report busy when the session recorded no usable handle", () => {
+    it("should report busy when no usable handle was recorded", () => {
       const { runtime, spec } = setup('schedule: "* * * * *"\nreuse: true');
-      holdSession(runtime, null);
+      holdSession(runtime);
 
       assert.equal(launch(spec, runtime), LaunchOutcome.Busy);
     });

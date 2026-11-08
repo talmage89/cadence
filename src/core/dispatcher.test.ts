@@ -91,7 +91,7 @@ describe("dispatch", () => {
     it("should log busy and move on when a resident agent's session cannot be reached", () => {
       const { terminal, runtime } = setup();
       writeSpec(runtime.agentsDirectory, "agent", 'schedule: "* * * * *"\nreuse: true');
-      acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T08:00:00.000Z", handle: { pane: "1" } });
+      acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T08:00:00.000Z" });
       dispatch(runtime, nineOClock);
 
       dispatch(runtime, minutesAfterNine(1));
@@ -108,7 +108,7 @@ describe("dispatch", () => {
       const previousSession = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
       const previousExit = once(previousSession, "exit");
       assert.ok(previousSession.pid);
-      acquireSession(sessionsDirectory(runtime), "agent", { pid: previousSession.pid, startedAt: "2026-10-16T08:00:00.000Z", handle: { pane: "1" } });
+      acquireSession(sessionsDirectory(runtime), "agent", { pid: previousSession.pid, startedAt: "2026-10-16T08:00:00.000Z" });
       dispatch(runtime, nineOClock);
 
       dispatch(runtime, minutesAfterNine(1));

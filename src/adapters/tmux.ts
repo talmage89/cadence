@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import type { Terminal } from "#core/ports.ts";
 import { parseOrThrow } from "#core/validation.ts";
-import { isLaunchOf, launchCommand, readLaunchId } from "./launch-command.ts";
+import { isLaunchOf, launchCommand } from "./launch-command.ts";
 
 export type TmuxExecutor = (tmuxArguments: string[]) => string;
 
@@ -28,21 +28,14 @@ export function tmux({ socketName, execute = executeTmux }: TmuxParams = {}): Te
     },
 
     open({ title, cwd, command, options: { tmux: sessionName } }) {
-      const placement: Placement = { agentName: title, cwd, argv: launchCommand(command).argv };
-      const paneId =
+      const { launchId, argv } = launchCommand(command);
+      const placement: Placement = { agentName: title, cwd, argv };
+      const pane =
         sessionName === undefined ? openInOwnSession(configuredServer, placement) : openInNamedSession(configuredServer, sessionName, placement);
 
-      configuredServer(["set-option", "-p", "-t", paneId, "remain-on-exit", "on"]);
-    },
+      configuredServer(["set-option", "-p", "-t", pane.paneId, "remain-on-exit", "on"]);
 
-    currentHandle(environment) {
-      const pane = paneEnvironmentSchema.safeParse(environment);
-      const launchId = readLaunchId(environment);
-      if (!pane.success || launchId === null) {
-        return null;
-      }
-
-      return { ...pane.data, launchId };
+      return { ...pane, launchId };
     },
 
     isLive(handle: TmuxHandle) {
@@ -94,11 +87,17 @@ const paneRowsSchema = rowsSchema(
 
 type TmuxPane = z.output<typeof paneRowsSchema>[number];
 
-const paneIdSchema = z.string().regex(paneIdPattern, { error: (issue) => `tmux returned an unexpected pane id: ${String(issue.input)}` });
+const createdPaneSchema = z
+  .string()
+  .transform((output) => output.split(fieldSeparator))
+  .pipe(
+    z.tuple([z.string().regex(paneIdPattern), z.string().min(1)], {
+      error: (issue) => `tmux returned an unexpected pane: ${JSON.stringify(issue.input)}`,
+    }),
+  )
+  .transform(([paneId, socket]) => ({ paneId, socket }));
 
-const paneEnvironmentSchema = z
-  .object({ TMUX: z.string().regex(/^.+,\d+,\d+$/), TMUX_PANE: z.string().regex(paneIdPattern) })
-  .transform(({ TMUX, TMUX_PANE }) => ({ socket: TMUX.replace(/,\d+,\d+$/, ""), paneId: TMUX_PANE }));
+type CreatedPane = z.output<typeof createdPaneSchema>;
 
 function executeTmux(tmuxArguments: string[]): string {
   const output = execFileSync("tmux", tmuxArguments, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -114,7 +113,7 @@ function listSessions(server: TmuxExecutor): z.output<typeof sessionRowsSchema> 
   return parseOrThrow(sessionRowsSchema, queryRunningServer(server, ["list-sessions", "-F", sessionFormat]));
 }
 
-function openInOwnSession(server: TmuxExecutor, placement: Placement): string {
+function openInOwnSession(server: TmuxExecutor, placement: Placement): CreatedPane {
   const { agentName } = placement;
   const sessions = listSessions(server);
   const ownSession = sessions.find((session) => session.agentName === agentName);
@@ -126,14 +125,14 @@ function openInOwnSession(server: TmuxExecutor, placement: Placement): string {
     throw new Error(`tmux session "${agentName}" was not opened by cadence; rename it, or name another session in the tmux key`);
   }
 
-  const paneId = createPane(server, ["new-session", "-d", "-s", agentName, "-n", agentName], placement);
-  server(["set-option", "-t", paneId, sessionTagOption, agentName]);
-  server(["set-option", "-w", "-t", paneId, windowTagOption, agentName]);
+  const pane = createPane(server, ["new-session", "-d", "-s", agentName, "-n", agentName], placement);
+  server(["set-option", "-t", pane.paneId, sessionTagOption, agentName]);
+  server(["set-option", "-w", "-t", pane.paneId, windowTagOption, agentName]);
 
-  return paneId;
+  return pane;
 }
 
-function openInNamedSession(server: TmuxExecutor, sessionName: string, placement: Placement): string {
+function openInNamedSession(server: TmuxExecutor, sessionName: string, placement: Placement): CreatedPane {
   const namedSession = listSessions(server).find((session) => session.name === sessionName);
   if (!namedSession) {
     throw new Error(`tmux session "${sessionName}" is not running; start it from your terminal`);
@@ -142,17 +141,17 @@ function openInNamedSession(server: TmuxExecutor, sessionName: string, placement
   return openInSession(server, namedSession.id, placement);
 }
 
-function openInSession(server: TmuxExecutor, sessionId: string, placement: Placement): string {
+function openInSession(server: TmuxExecutor, sessionId: string, placement: Placement): CreatedPane {
   const { agentName } = placement;
   const agentWindowId = findAgentWindowId(server, sessionId, agentName);
   if (agentWindowId !== null) {
     return createPane(server, ["split-window", "-d", "-t", agentWindowId], placement);
   }
 
-  const paneId = createPane(server, ["new-window", "-d", "-t", `${sessionId}:`, "-n", agentName], placement);
-  server(["set-option", "-w", "-t", paneId, windowTagOption, agentName]);
+  const pane = createPane(server, ["new-window", "-d", "-t", `${sessionId}:`, "-n", agentName], placement);
+  server(["set-option", "-w", "-t", pane.paneId, windowTagOption, agentName]);
 
-  return paneId;
+  return pane;
 }
 
 function findAgentWindowId(server: TmuxExecutor, sessionId: string, agentName: string): string | null {
@@ -162,8 +161,9 @@ function findAgentWindowId(server: TmuxExecutor, sessionId: string, agentName: s
   return windows.find((listedWindow) => listedWindow.agentName === agentName)?.id ?? null;
 }
 
-function createPane(server: TmuxExecutor, creationArguments: string[], { cwd, argv }: Placement): string {
-  return parseOrThrow(paneIdSchema, server([...creationArguments, "-c", cwd, "-P", "-F", "#{pane_id}", "--", ...argv]));
+function createPane(server: TmuxExecutor, creationArguments: string[], { cwd, argv }: Placement): CreatedPane {
+  const createdPaneFormat = ["#{pane_id}", "#{socket_path}"].join(fieldSeparator);
+  return parseOrThrow(createdPaneSchema, server([...creationArguments, "-c", cwd, "-P", "-F", createdPaneFormat, "--", ...argv]));
 }
 
 function serverAt(execute: TmuxExecutor, socket: string): TmuxExecutor {

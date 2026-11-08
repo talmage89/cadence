@@ -4,7 +4,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { temporaryDirectory } from "#testing/fakes.ts";
-import { acquireSession, isProcessAlive, readLiveSession, readPreviousSession, releaseSession, type SessionRecord } from "./session.ts";
+import { acquireSession, isProcessAlive, readLiveSession, readOpenedHandle, recordOpenedHandle, releaseSession, type SessionRecord } from "./session.ts";
 
 function exitedPid(): number {
   const { pid } = spawnSync(process.execPath, ["-e", ""]);
@@ -13,7 +13,7 @@ function exitedPid(): number {
 }
 
 function record(pid: number): SessionRecord {
-  return { pid, startedAt: "2026-10-16T09:00:00.000Z", handle: { pane: "1" } };
+  return { pid, startedAt: "2026-10-16T09:00:00.000Z" };
 }
 
 describe("isProcessAlive", () => {
@@ -67,12 +67,6 @@ describe("acquireSession", () => {
   });
 });
 
-describe("readPreviousSession", () => {
-  it("should be null before any session has finished", () => {
-    assert.equal(readPreviousSession(temporaryDirectory(), "agent"), null);
-  });
-});
-
 describe("readLiveSession", () => {
   it("should ignore a record whose process has exited", () => {
     const directory = temporaryDirectory();
@@ -83,7 +77,7 @@ describe("readLiveSession", () => {
 });
 
 describe("releaseSession", () => {
-  it("should keep its holder's record as the previous session", () => {
+  it("should remove its holder's record", () => {
     const directory = temporaryDirectory();
     acquireSession(directory, "agent", record(process.pid));
 
@@ -91,7 +85,6 @@ describe("releaseSession", () => {
 
     assert.equal(existsSync(join(directory, "agent.json")), false);
     assert.equal(readLiveSession(directory, "agent"), null);
-    assert.deepEqual(readPreviousSession(directory, "agent"), record(process.pid));
   });
 
   it("should leave another holder's record alone", () => {
@@ -103,18 +96,40 @@ describe("releaseSession", () => {
     assert.equal(existsSync(join(directory, "agent.json")), true);
   });
 
-  it("should replace an older previous session", () => {
-    const directory = temporaryDirectory();
-    acquireSession(directory, "agent", record(process.pid));
-    releaseSession(directory, "agent", process.pid);
-    acquireSession(directory, "agent", { ...record(process.pid), startedAt: "2026-10-16T10:00:00.000Z" });
-
-    releaseSession(directory, "agent", process.pid);
-
-    assert.equal(readPreviousSession(directory, "agent")?.startedAt, "2026-10-16T10:00:00.000Z");
-  });
-
   it("should tolerate a missing record", () => {
     assert.doesNotThrow(() => releaseSession(temporaryDirectory(), "agent", process.pid));
+  });
+});
+
+describe("recordOpenedHandle", () => {
+  it("should keep the latest handle for readOpenedHandle, leaving no temporary files", () => {
+    const directory = temporaryDirectory();
+    recordOpenedHandle(directory, "agent", { pane: "1" });
+
+    recordOpenedHandle(directory, "agent", { pane: "2" });
+
+    assert.deepEqual(readOpenedHandle(directory, "agent"), { pane: "2" });
+    assert.deepEqual(readdirSync(directory), ["agent.handle.json"]);
+  });
+
+  it("should keep the handle apart from the session record", () => {
+    const directory = temporaryDirectory();
+    acquireSession(directory, "agent", record(process.pid));
+    recordOpenedHandle(directory, "agent", { pane: "1" });
+
+    releaseSession(directory, "agent", process.pid);
+
+    assert.deepEqual(readOpenedHandle(directory, "agent"), { pane: "1" });
+  });
+});
+
+describe("readOpenedHandle", () => {
+  it("should be null before any session has opened, or when the file is unreadable", () => {
+    const directory = temporaryDirectory();
+    assert.equal(readOpenedHandle(directory, "agent"), null);
+
+    writeFileSync(join(directory, "agent.handle.json"), "{not json");
+
+    assert.equal(readOpenedHandle(directory, "agent"), null);
   });
 });

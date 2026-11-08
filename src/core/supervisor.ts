@@ -14,11 +14,7 @@ export interface SuperviseParams {
 export async function supervise(spec: AgentSpec, runtime: Runtime, { lockWaitMilliseconds = defaultLockWaitMilliseconds }: SuperviseParams = {}): Promise<number> {
   const log = agentLog(runtime, spec.name);
   const directory = sessionsDirectory(runtime);
-  const record = {
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    handle: runtime.terminal.currentHandle(process.env),
-  };
+  const record = { pid: process.pid, startedAt: new Date().toISOString() };
 
   if (!(await waitForSession(directory, spec.name, record, lockWaitMilliseconds))) {
     appendLog(log, "not started: another session of this agent is still running");

@@ -13,8 +13,9 @@ run is delivered to the same session as a new prompt.
 - Node 24 or later
 - The terminal and agent CLI your configuration names. The shipped
   configuration runs [Claude Code](https://claude.com/claude-code) in
-  [zellij](https://zellij.dev) or [tmux](https://github.com/tmux/tmux), and
-  gates launches on a macOS machine being fully awake.
+  [zellij](https://zellij.dev), [tmux](https://github.com/tmux/tmux),
+  [iTerm2](https://iterm2.com), [Ghostty](https://ghostty.org) 1.4 or later,
+  or macOS Terminal, and gates launches on a macOS machine being fully awake.
 
 ## Setup
 
@@ -41,7 +42,8 @@ launchctl load ~/Library/LaunchAgents/local.cadence.plist
 ```
 
 The `PATH` you bake in is the dispatcher's own, so it must reach your terminal
-(`zellij` or `tmux`). Agents get their environment from your login shell instead.
+(`zellij` or `tmux`; the macOS apps need nothing on it). Agents get their
+environment from your login shell instead.
 
 ## Commands
 
@@ -81,7 +83,8 @@ Core keys:
 | `reuse` | default `false` | `true` keeps one resident session that every later run is delivered to as a prompt; `false` starts a fresh session each run |
 
 `CADENCE_TERMINAL` in `.env` picks the terminal agents run in: `zellij` (the
-default) or `tmux`. Each terminal owns its own keys.
+default), `tmux`, `iterm2`, `ghostty`, or `terminal-app`. Each terminal owns
+its own keys.
 
 Keys owned by the zellij terminal:
 
@@ -119,6 +122,26 @@ its own session the first time it runs (`tmux attach -t digest`); cadence marks
 that session as the agent's and refuses to use a session of the same name that
 it did not create. A finished pane stays, showing how the run ended. Agents run
 through your login shell, as with zellij.
+
+iTerm2, Ghostty, and macOS Terminal own no keys. cadence drives them through
+AppleScript, so the first time it does, macOS asks whether to let it control
+the app; until you allow that (System Settings, Privacy & Security, Automation)
+launches fail and are retried each minute. Keep the app running: while it is
+not, due agents wait.
+
+Each agent gets a window of its own on its first run. A later run takes the old
+session's place in that window, then the old session is closed: iTerm2 and
+Ghostty split the old session, and Terminal, which cannot split, opens a window
+where the old one was. A finished session stays open, showing how the run
+ended, until you press Enter in it (any key, in Ghostty). iTerm2 and Ghostty can take focus when they
+open an agent's window, on its first run or after you close it; replacing a
+session never does, and Terminal always opens in the background. Ghostty labels the
+agent's tab with its name, and Terminal does the same.
+
+Terminal types the agent's command into a new shell, so shell startup files
+that start tmux or zellij capture it. The other terminals set
+`CADENCE_LAUNCH_ID` before your shell starts, so startup files can skip work
+for agents with `[ -z "$CADENCE_LAUNCH_ID" ]`.
 
 Sessions stay open between runs. Without `reuse`, each run replaces the last:
 cadence stops the previous session, opens the new one, then closes the old pane,

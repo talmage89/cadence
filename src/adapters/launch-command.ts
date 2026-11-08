@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 
 export interface LaunchCommand {
   launchId: string;
   argv: string[];
+}
+
+export interface HeldLaunchParams {
+  command: string[];
+  cwd: string;
 }
 
 /**
@@ -19,19 +23,35 @@ export function launchCommand(command: string[]): LaunchCommand {
   };
 }
 
-export function readLaunchId(environment: NodeJS.ProcessEnv): string | null {
-  const result = launchEnvironmentSchema.safeParse(environment);
-  return result.success ? result.data : null;
+/** For terminals that neither set a session's directory nor keep it open once its command exits. */
+export function heldLaunchCommand({ command, cwd }: HeldLaunchParams): LaunchCommand {
+  const launchId = randomUUID();
+
+  return {
+    launchId,
+    argv: ["/usr/bin/env", launchAssignment(launchId), "/bin/sh", "-c", heldLoginShellScript, "cadence", cwd, ...command],
+  };
 }
 
 export function isLaunchOf(startCommand: string | null, launchId: string): boolean {
   return startCommand !== null && startCommand.includes(launchAssignment(launchId));
 }
 
+/** Quotes `argv` into one line that a POSIX shell reads back as the same words. */
+export function shellCommandLine(argv: string[]): string {
+  return argv.map((word) => `'${word.replaceAll("'", `'\\''`)}'`).join(" ");
+}
+
 const launchIdVariable = "CADENCE_LAUNCH_ID";
 const loginShellScript = `exec "\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`;
 
-const launchEnvironmentSchema = z.object({ [launchIdVariable]: z.uuid() }).transform((environment) => environment[launchIdVariable]);
+const heldLoginShellScript = [
+  `cd "$1" || exit`,
+  `shift`,
+  `"\${SHELL:-/bin/sh}" -lic 'exec "$0" "$@"' "$@"`,
+  `printf '\\n[cadence: exited with status %s; press Enter to close]\\n' "$?"`,
+  `read -r reply`,
+].join("\n");
 
 function launchAssignment(launchId: string): string {
   return `${launchIdVariable}=${launchId}`;

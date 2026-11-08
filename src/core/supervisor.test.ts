@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { z } from "zod";
-import { fakeRuntime, fakeTerminal, readLogMessages, temporaryDirectory } from "#testing/fakes.ts";
+import { fakeRuntime, readLogMessages, temporaryDirectory } from "#testing/fakes.ts";
 import { scheduleSchema } from "./cron.ts";
 import type { Runner } from "./ports.ts";
 import { agentLog, type Runtime, sessionsDirectory } from "./runtime.ts";
@@ -53,19 +53,16 @@ describe("supervise", () => {
       assert.deepEqual(agentLogMessages(runtime), ["started (replaced)", "exited with code 3"]);
     });
 
-    it("should hold the session record with the terminal's handle while running, then release it", async () => {
-      const terminal = fakeTerminal();
-      terminal.environmentHandle = { pane: "9" };
-      const runtime = fakeRuntime({ terminal });
+    it("should hold the session record while running, then release it", async () => {
+      const runtime = fakeRuntime();
       const copy = join(temporaryDirectory(), "record.json");
       const script = `require("fs").copyFileSync(${JSON.stringify(recordFile(runtime))}, ${JSON.stringify(copy)})`;
 
       const exitCode = await supervise(agentSpec(script), runtime);
 
-      const heldRecord = jsonSchema(z.object({ pid: z.number(), handle: z.unknown() })).parse(readFileSync(copy, "utf8"));
+      const heldRecord = jsonSchema(z.object({ pid: z.number() })).parse(readFileSync(copy, "utf8"));
       assert.equal(exitCode, 0);
       assert.equal(heldRecord.pid, process.pid);
-      assert.deepEqual(heldRecord.handle, { pane: "9" });
       assert.equal(existsSync(recordFile(runtime)), false);
     });
   });
@@ -74,7 +71,7 @@ describe("supervise", () => {
     it("should start once the previous session lets go of the lock", async () => {
       const runtime = fakeRuntime();
       const previousSession = spawn(process.execPath, ["-e", "setTimeout(() => {}, 300)"]);
-      acquireSession(sessionsDirectory(runtime), "agent", { pid: previousSession.pid ?? 0, startedAt: "2026-10-16T08:00:00.000Z", handle: null });
+      acquireSession(sessionsDirectory(runtime), "agent", { pid: previousSession.pid ?? 0, startedAt: "2026-10-16T08:00:00.000Z" });
 
       const exitCode = await supervise(agentSpec(""), runtime, { lockWaitMilliseconds: 5_000 });
 
@@ -84,7 +81,7 @@ describe("supervise", () => {
 
     it("should give up when the previous session holds on past the wait", async () => {
       const runtime = fakeRuntime();
-      acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T08:00:00.000Z", handle: null });
+      acquireSession(sessionsDirectory(runtime), "agent", { pid: process.pid, startedAt: "2026-10-16T08:00:00.000Z" });
       const marker = join(temporaryDirectory(), "ran");
 
       const exitCode = await supervise(agentSpec(`require("fs").writeFileSync(${JSON.stringify(marker)}, "")`), runtime, { lockWaitMilliseconds: 300 });

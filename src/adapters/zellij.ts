@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import type { Terminal } from "#core/ports.ts";
 import { jsonSchema, parseOrThrow } from "#core/validation.ts";
-import { isLaunchOf, launchCommand, readLaunchId } from "./launch-command.ts";
+import { isLaunchOf, launchCommand } from "./launch-command.ts";
 
 export type ZellijExecutor = (zellijArguments: string[]) => string;
 
@@ -28,20 +28,12 @@ export function zellij({ execute = executeZellij }: ZellijParams = {}): Terminal
       requireLiveSession(execute, sessionName);
 
       const tabId = findAgentTabId(execute, sessionName, title);
-      const { argv } = launchCommand(command);
+      const { launchId, argv } = launchCommand(command);
       const paneId = parseOrThrow(paneIdSchema, execute(["--session", sessionName, "run", "--tab-id", tabId, "--cwd", cwd, "--name", title, "--", ...argv]));
 
       stackTab(execute, sessionName, tabId, paneId);
-    },
 
-    currentHandle(environment) {
-      const pane = paneEnvironmentSchema.safeParse(environment);
-      const launchId = readLaunchId(environment);
-      if (!pane.success || launchId === null) {
-        return null;
-      }
-
-      return { ...pane.data, launchId };
+      return { session: sessionName, paneId, launchId };
     },
 
     isLive(handle: ZellijHandle) {
@@ -84,10 +76,6 @@ const panesSchema = jsonSchema(
 type ZellijPane = z.output<typeof panesSchema>[number];
 
 const paneIdSchema = z.string().regex(/^terminal_\d+$/, { error: (issue) => `zellij returned an unexpected pane id: ${String(issue.input)}` });
-
-const paneEnvironmentSchema = z
-  .object({ ZELLIJ_SESSION_NAME: z.string().min(1), ZELLIJ_PANE_ID: z.string().regex(/^\d+$/) })
-  .transform(({ ZELLIJ_SESSION_NAME, ZELLIJ_PANE_ID }) => ({ session: ZELLIJ_SESSION_NAME, paneId: toPaneId(ZELLIJ_PANE_ID) }));
 
 function executeZellij(zellijArguments: string[]): string {
   return execFileSync("zellij", zellijArguments, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
