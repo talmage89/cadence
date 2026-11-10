@@ -157,6 +157,8 @@ Keys owned by the Claude Code runner:
 | `permission-mode` | optional | passed as `--permission-mode` |
 | `model` | optional | passed as `--model` |
 | `tools` | optional | list passed as `--allowedTools` |
+| `settings` | optional | settings file or JSON passed as `--settings`; `~` expands |
+| `add-dir` | optional | list passed as `--add-dir`; `~` expands |
 
 Claude Code asks before working in a directory it has not seen, and a session
 waiting on that question looks idle. Open Claude Code once in each agent's

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { claude } from "./claude.ts";
 
@@ -20,6 +22,20 @@ describe("claude", () => {
       assert.deepEqual(command, ["claude", "go", "--permission-mode", "auto", "--model", "sonnet", "--allowedTools", "Read", "Bash(git *)"]);
     });
 
+    it("should pass settings and added directories with the home directory expanded", () => {
+      const options = runner.options.parse({ settings: "~/agent-settings.json", "add-dir": ["~/code", "/srv/data"] });
+
+      const command = runner.command("go", options);
+
+      assert.deepEqual(command, ["claude", "go", "--settings", join(homedir(), "agent-settings.json"), "--add-dir", join(homedir(), "code"), "/srv/data"]);
+    });
+
+    it("should pass inline settings unchanged", () => {
+      const options = runner.options.parse({ settings: '{"hooks":{}}' });
+
+      assert.deepEqual(runner.command("go", options), ["claude", "go", "--settings", '{"hooks":{}}']);
+    });
+
     it("should omit an empty tool list", () => {
       const options = runner.options.parse({ tools: [] });
 
@@ -37,6 +53,7 @@ describe("claude", () => {
     it("should reject values of the wrong type", () => {
       assert.equal(runner.options.safeParse({ model: 4 }).success, false);
       assert.equal(runner.options.safeParse({ tools: "Read" }).success, false);
+      assert.equal(runner.options.safeParse({ "add-dir": "~/code" }).success, false);
     });
   });
 });
