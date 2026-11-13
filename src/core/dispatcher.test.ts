@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { z } from "zod";
 import { type FakeTerminal, fakeRuntime, fakeTerminal, readLogMessages, writeSpec } from "#testing/fakes.ts";
@@ -117,6 +117,85 @@ describe("dispatch", () => {
       assert.equal(terminal.opened.length, 1);
       assert.equal(agentState(runtime, "agent")?.lastStarted, minutesAfterNine(1).toISOString());
       assert.deepEqual(readLogMessages(dispatchLog(runtime)), ["replaced agent"]);
+    });
+  });
+
+  describe("run-now", () => {
+    it("should start a registered agent at once, whatever its schedule, and turn run-now off", () => {
+      const { terminal, runtime } = setup();
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"');
+      dispatch(runtime, nineOClock);
+      const file = writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"\nrun-now: true');
+
+      dispatch(runtime, minutesAfterNine(1));
+      dispatch(runtime, minutesAfterNine(2));
+
+      assert.equal(terminal.opened.length, 1);
+      assert.equal(agentState(runtime, "agent")?.lastStarted, minutesAfterNine(1).toISOString());
+      assert.match(readFileSync(file, "utf8"), /^run-now: false$/m);
+    });
+
+    it("should start an agent seen for the first time", () => {
+      const { terminal, runtime } = setup();
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"\nrun-now: true');
+
+      dispatch(runtime, nineOClock);
+
+      assert.equal(terminal.opened.length, 1);
+    });
+
+    it("should wait until a disabled agent is enabled", () => {
+      const { terminal, runtime } = setup();
+      const file = writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"\nrun-now: true\nenabled: false');
+
+      dispatch(runtime, nineOClock);
+      dispatch(runtime, minutesAfterNine(1));
+
+      assert.equal(terminal.opened.length, 0);
+      assert.match(readFileSync(file, "utf8"), /^run-now: true$/m);
+
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"\nrun-now: true\nenabled: true');
+      dispatch(runtime, minutesAfterNine(2));
+
+      assert.equal(terminal.opened.length, 1);
+    });
+
+    it("should stay on while the launch keeps failing", () => {
+      const { terminal, runtime } = setup();
+      const file = writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"\nrun-now: true');
+      terminal.openError = new Error("zellij is wedged");
+
+      dispatch(runtime, nineOClock);
+      dispatch(runtime, minutesAfterNine(1));
+
+      assert.match(readFileSync(file, "utf8"), /^run-now: true$/m);
+
+      terminal.openError = null;
+      dispatch(runtime, minutesAfterNine(2));
+
+      assert.equal(terminal.opened.length, 1);
+      assert.match(readFileSync(file, "utf8"), /^run-now: false$/m);
+    });
+
+    it("should not relaunch every minute when run-now cannot be turned off", () => {
+      const { terminal, runtime } = setup();
+      // A flow mapping has no line of its own for run-now to rewrite.
+      writeSpec(runtime.agentsDirectory, "agent", '{ schedule: "0 22 * * *", run-now: true }');
+
+      dispatch(runtime, nineOClock);
+      dispatch(runtime, minutesAfterNine(1));
+      dispatch(runtime, minutesAfterNine(2));
+
+      assert.equal(terminal.opened.length, 1);
+      assert.deepEqual(readLogMessages(dispatchLog(runtime)), [
+        "started agent",
+        'failed agent: started by run-now, which could not be turned off: found no "run-now: …" line to rewrite',
+      ]);
+
+      writeSpec(runtime.agentsDirectory, "agent", 'schedule: "0 22 * * *"');
+      dispatch(runtime, minutesAfterNine(3));
+
+      assert.deepEqual(agentState(runtime, "agent"), { lastChecked: minuteStamp(9, 3), lastStarted: nineOClock.toISOString() });
     });
   });
 

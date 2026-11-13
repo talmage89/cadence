@@ -9,6 +9,11 @@ export type ScheduleDecision = (typeof ScheduleDecision)[keyof typeof ScheduleDe
 export const lookbackMilliseconds = 7 * dayMilliseconds;
 
 export function decideSchedule(spec: AgentSpec, agentState: AgentState | undefined, nowMilliseconds: number): ScheduleDecision {
+  const isRunNowPending = spec.runNow && agentState?.hasHonoredRunNow !== true;
+  if (spec.enabled && isRunNowPending) {
+    return ScheduleDecision.Due;
+  }
+
   if (!agentState) {
     return ScheduleDecision.Register;
   }

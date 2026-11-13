@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { type Schedule, scheduleSchema } from "./cron.ts";
-import { splitFrontmatter } from "./frontmatter.ts";
+import { setFrontmatterFlag, splitFrontmatter } from "./frontmatter.ts";
 import { expandHome } from "./paths.ts";
 import type { Runner, Terminal } from "./ports.ts";
 import { describeError, parseOrThrow } from "./validation.ts";
@@ -17,6 +17,7 @@ export interface AgentSpec {
   enabled: boolean;
   cwd: string;
   lifetime: Lifetime;
+  runNow: boolean;
   runnerOptions: Record<string, unknown>;
   terminalOptions: Record<string, unknown>;
 }
@@ -74,20 +75,29 @@ export function parseSpec({ name, file, text }: SpecSource, context: SpecContext
     enabled: core.enabled,
     cwd: resolve(dirname(file), expandHome(core.cwd ?? context.defaultCwd)),
     lifetime: core.reuse ? Lifetime.Resident : Lifetime.Replaced,
+    runNow: core[runNowKey],
     runnerOptions: parseOrThrow(context.runner.options, fields),
     terminalOptions: parseOrThrow(context.terminal.options, fields),
   };
+}
+
+export function turnOffRunNow(spec: AgentSpec): void {
+  const text = readFileSync(spec.file, "utf8");
+  writeFileSync(spec.file, setFrontmatterFlag(text, runNowKey, false));
 }
 
 export function instructionsPrompt(spec: AgentSpec): string {
   return `Your instructions are in ${spec.file}. Its frontmatter only configures your schedule; carry out the instructions in the body.`;
 }
 
+const runNowKey = "run-now";
+
 const coreFieldsSchema = z.object({
   schedule: scheduleSchema,
   enabled: z.boolean().default(true),
   cwd: z.string().optional(),
   reuse: z.boolean().default(false),
+  [runNowKey]: z.boolean().default(false),
 });
 
 function findUnknownKeys(fields: Record<string, unknown>, schemas: z.ZodObject[]): string[] {

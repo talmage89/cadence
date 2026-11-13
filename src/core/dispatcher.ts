@@ -4,7 +4,7 @@ import { LaunchOutcome, launch } from "./launcher.ts";
 import { appendLog } from "./log.ts";
 import { dispatchLog, type Runtime, stateFile } from "./runtime.ts";
 import { decideSchedule, ScheduleDecision } from "./schedule-decision.ts";
-import { type AgentSpec, loadSpecs, SpecLoadKind } from "./spec.ts";
+import { type AgentSpec, loadSpecs, SpecLoadKind, turnOffRunNow } from "./spec.ts";
 import { type AgentState, type DispatchState, loadState, saveState } from "./state.ts";
 import { describeError } from "./validation.ts";
 
@@ -65,12 +65,18 @@ function memoize(compute: () => boolean): () => boolean {
 
 function advanceAgent(tick: Tick, spec: AgentSpec, agentState: AgentState | undefined): AgentState {
   const decision = decideSchedule(spec, agentState, tick.now.getTime());
-  if (decision !== ScheduleDecision.Due || !agentState) {
+  if (decision !== ScheduleDecision.Due) {
+    const isRunNowStillOn = spec.runNow && agentState?.hasHonoredRunNow === true;
+    if (isRunNowStillOn) {
+      return consumeRunNow(tick, spec, { ...agentState, lastChecked: tick.checkedAt });
+    }
+
     return markChecked(tick, agentState);
   }
 
+  const heldState = agentState ?? markChecked(tick, undefined);
   if (!tick.isTerminalAvailable()) {
-    return agentState;
+    return heldState;
   }
 
   try {
@@ -78,9 +84,24 @@ function advanceAgent(tick: Tick, spec: AgentSpec, agentState: AgentState | unde
     appendLog(dispatchLog(tick.runtime), `${outcome} ${spec.name}`, tick.now);
 
     const checkedState = markChecked(tick, agentState);
-    return outcome === LaunchOutcome.Busy ? checkedState : { ...checkedState, lastStarted: tick.now.toISOString() };
+    if (outcome === LaunchOutcome.Busy) {
+      return checkedState;
+    }
+
+    const startedState = { ...checkedState, lastStarted: tick.now.toISOString() };
+    return spec.runNow ? consumeRunNow(tick, spec, startedState) : startedState;
   } catch (error) {
-    return recordError(tick, spec.name, agentState, describeError(error));
+    return recordError(tick, spec.name, heldState, describeError(error));
+  }
+}
+
+function consumeRunNow(tick: Tick, spec: AgentSpec, agentState: AgentState): AgentState {
+  try {
+    turnOffRunNow(spec);
+    return markChecked(tick, agentState);
+  } catch (error) {
+    const honoredState = { ...agentState, hasHonoredRunNow: true };
+    return recordError(tick, spec.name, honoredState, `started by run-now, which could not be turned off: ${describeError(error)}`);
   }
 }
 

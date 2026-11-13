@@ -7,6 +7,7 @@ const agentStateSchema = z.object({
   lastChecked: z.string(),
   lastStarted: z.string().optional(),
   lastError: z.string().optional(),
+  hasHonoredRunNow: z.boolean().optional(),
 });
 
 const dispatchStateSchema = z.object({

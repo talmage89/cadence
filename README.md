@@ -81,6 +81,7 @@ Core keys:
 | `enabled` | default `true` | `false` stops launches without deleting the agent |
 | `cwd` | default `CADENCE_DEFAULT_CWD`, else the state directory | working directory; `~` expands, relative paths resolve from the spec's directory |
 | `reuse` | default `false` | `true` keeps one resident session that every later run is delivered to as a prompt; `false` starts a fresh session each run |
+| `run-now` | default `false` | `true` launches the agent at the next dispatch whatever its schedule says, then cadence sets it back to `false` |
 
 `CADENCE_TERMINAL` in `.env` picks the terminal agents run in: `zellij` (the
 default), `tmux`, `iterm2`, `ghostty`, or `terminal-app`. Each terminal owns
@@ -171,6 +172,12 @@ Any other key is an error, reported once in the dispatch log.
 
 - An agent seen for the first time is only registered; it never fires
   retroactively.
+- An agent with `run-now: true` is due at once, even when seen for the first
+  time; while `enabled` is `false` it waits until you enable it. Once the agent
+  starts or receives its prompt, cadence rewrites that line to `run-now: false`,
+  leaving the rest of the file untouched. Until then, including while the
+  agent waits on a gate or the terminal, or its launch keeps failing, it stays
+  `true`. This is the only time cadence writes to an agent's file.
 - An agent is due when its schedule matched any minute since it was last
   checked, up to a week back. Several missed minutes collapse into one launch.
 - If the terminal has no live session to work with, a due agent waits and

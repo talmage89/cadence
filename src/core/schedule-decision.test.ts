@@ -46,4 +46,26 @@ describe("decideSchedule", () => {
 
     assert.equal(decideSchedule(yearly, { lastChecked: longAgo }, now), ScheduleDecision.NotDue);
   });
+
+  describe("run-now", () => {
+    const tenPmNow = spec('schedule: "0 22 * * *"\nrun-now: true');
+
+    it("should be due whatever the schedule says", () => {
+      assert.equal(decideSchedule(tenPmNow, { lastChecked: new Date(now).toISOString() }, now), ScheduleDecision.Due);
+    });
+
+    it("should be due for an agent seen for the first time", () => {
+      assert.equal(decideSchedule(tenPmNow, undefined, now), ScheduleDecision.Due);
+    });
+
+    it("should wait while the agent is disabled", () => {
+      const disabled = spec('schedule: "0 22 * * *"\nrun-now: true\nenabled: false');
+
+      assert.equal(decideSchedule(disabled, { lastChecked: minuteAgo }, now), ScheduleDecision.Disabled);
+    });
+
+    it("should fall back to the schedule once honored", () => {
+      assert.equal(decideSchedule(tenPmNow, { lastChecked: minuteAgo, hasHonoredRunNow: true }, now), ScheduleDecision.NotDue);
+    });
+  });
 });

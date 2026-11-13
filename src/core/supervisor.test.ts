@@ -21,6 +21,7 @@ function agentSpec(script: string, cwd = temporaryDirectory()): AgentSpec {
     enabled: true,
     cwd,
     lifetime: Lifetime.Replaced,
+    runNow: false,
     runnerOptions: { script },
     terminalOptions: {},
   };

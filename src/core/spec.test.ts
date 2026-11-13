@@ -22,6 +22,7 @@ describe("parseSpec", () => {
       assert.equal(spec.enabled, true);
       assert.equal(spec.cwd, "/work");
       assert.equal(spec.lifetime, Lifetime.Replaced);
+      assert.equal(spec.runNow, false);
       assert.deepEqual(spec.runnerOptions, { script: "" });
       assert.deepEqual(spec.terminalOptions, { session: "main" });
     });
@@ -34,6 +35,12 @@ describe("parseSpec", () => {
 
     it("should reject the retired timeout key", () => {
       assert.throws(() => parse('schedule: "0 9 * * *"\ntimeout: 45m'), /unknown frontmatter keys: timeout/);
+    });
+  });
+
+  describe("run-now", () => {
+    it("should read run-now", () => {
+      assert.equal(parse('schedule: "0 9 * * *"\nrun-now: true').runNow, true);
     });
   });
 
